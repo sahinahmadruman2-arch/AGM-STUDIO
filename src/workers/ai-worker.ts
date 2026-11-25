@@ -9,7 +9,7 @@ import {
 
 const DEFAULT_MODEL_ID = 'HuggingFaceTB/SmolLM2-360M-Instruct';
 
-// Enable browser Cache API for downloaded ONNX weights when available
+// Configure Transformers.js for pure browser execution & Cache API storage
 env.allowLocalModels = false;
 env.useBrowserCache = true;
 
@@ -21,6 +21,7 @@ type WorkerInboundMessage =
       modelId?: string;
       messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
       maxNewTokens: number;
+      temperature: number;
       devicePreference: 'auto' | 'webgpu' | 'wasm';
     }
   | { type: 'stop' }
@@ -38,7 +39,9 @@ function post(payload: Record<string, unknown>) {
 
 async function detectWebGpuSupport(): Promise<boolean> {
   try {
-    const nav = self.navigator as Navigator & { gpu?: { requestAdapter: () => Promise<unknown | null> } };
+    const nav = self.navigator as Navigator & {
+      gpu?: { requestAdapter: () => Promise<unknown | null> };
+    };
     if (!nav?.gpu) return false;
     const adapter = await nav.gpu.requestAdapter();
     return Boolean(adapter);
@@ -93,6 +96,18 @@ async function initPipelineWithBackend(modelId: string, backend: 'webgpu' | 'was
   return pipe;
 }
 
+function formatLoadError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const lower = raw.toLowerCase();
+  if (lower.includes('failed to fetch') || lower.includes('networkerror') || lower.includes('offline')) {
+    return 'Unable to download model files. The first model download requires internet access to fetch weights from Hugging Face Hub; once cached, offline inference is supported.';
+  }
+  if (lower.includes('out of memory') || lower.includes('oom') || lower.includes('memory')) {
+    return 'Browser ran out of memory while loading this model. Try switching to SmolLM2-135M-Instruct in Settings or closing other browser tabs.';
+  }
+  return raw || 'Failed to initialize local AI model in browser.';
+}
+
 async function ensureModelLoaded(
   requestedModelId: string | undefined,
   devicePreference: 'auto' | 'webgpu' | 'wasm'
@@ -120,7 +135,7 @@ async function ensureModelLoaded(
       status: 'loading',
       modelId,
       backend: null,
-      detail: 'Checking browser compute capabilities...',
+      detail: 'Checking browser WebGPU and WebAssembly support...',
     });
 
     const hasWebGpu = devicePreference !== 'wasm' ? await detectWebGpuSupport() : false;
@@ -143,8 +158,8 @@ async function ensureModelLoaded(
         backend: preferredBackend,
         detail:
           preferredBackend === 'webgpu'
-            ? `Initializing ${shortName} with WebGPU...`
-            : `Initializing ${shortName} with WebAssembly...`,
+            ? `Initializing ${shortName} on WebGPU...`
+            : `Initializing ${shortName} on WebAssembly (WASM)...`,
       });
 
       generator = await initPipelineWithBackend(modelId, preferredBackend);
@@ -164,20 +179,24 @@ async function ensureModelLoaded(
           status: 'loading',
           modelId,
           backend: 'wasm',
-          detail: 'WebGPU unavailable for this model; falling back to WASM...',
+          detail: 'WebGPU initialization failed; falling back to WebAssembly (WASM)...',
         });
-        generator = await initPipelineWithBackend(modelId, 'wasm');
-        loadedModelId = modelId;
-        activeBackend = 'wasm';
-        post({
-          type: 'status',
-          status: 'ready',
-          modelId,
-          backend: 'wasm',
-          detail: 'Ready (WASM fallback)',
-        });
+        try {
+          generator = await initPipelineWithBackend(modelId, 'wasm');
+          loadedModelId = modelId;
+          activeBackend = 'wasm';
+          post({
+            type: 'status',
+            status: 'ready',
+            modelId,
+            backend: 'wasm',
+            detail: 'Ready (WASM fallback)',
+          });
+        } catch (wasmErr) {
+          throw new Error(formatLoadError(wasmErr));
+        }
       } else {
-        throw err;
+        throw new Error(formatLoadError(err));
       }
     }
   })();
@@ -198,7 +217,7 @@ async function unloadModel() {
         await disposable.dispose();
       }
     } catch {
-      // Ignore dispose failure
+      // Ignore dispose errors
     }
     generator = null;
   }
@@ -208,7 +227,7 @@ async function unloadModel() {
     type: 'status',
     status: 'idle',
     backend: null,
-    detail: 'Model unloaded',
+    detail: 'Model unloaded from memory',
   });
 }
 
@@ -225,7 +244,7 @@ async function handleGenerate(msg: Extract<WorkerInboundMessage, { type: 'genera
       status: 'generating',
       modelId: loadedModelId,
       backend: activeBackend,
-      detail: `Generating on ${activeBackend === 'webgpu' ? 'WebGPU' : 'WASM'}...`,
+      detail: `Generating locally (${activeBackend === 'webgpu' ? 'WebGPU' : 'WASM'})...`,
     });
 
     const streamer = new TextStreamer(generator.tokenizer, {
@@ -242,12 +261,14 @@ async function handleGenerate(msg: Extract<WorkerInboundMessage, { type: 'genera
       },
     });
 
+    const safeTemp = Math.max(0.1, Math.min(1.2, msg.temperature || 0.6));
+
     await generator(msg.messages, {
       max_new_tokens: Math.max(64, Math.min(1024, msg.maxNewTokens || 512)),
-      do_sample: true,
-      temperature: 0.6,
+      do_sample: safeTemp > 0.15,
+      temperature: safeTemp,
       top_p: 0.9,
-      repetition_penalty: 1.1,
+      repetition_penalty: 1.12,
       streamer,
       stopping_criteria: [stoppingCriteria],
     });
@@ -266,7 +287,7 @@ async function handleGenerate(msg: Extract<WorkerInboundMessage, { type: 'genera
       detail: `Ready (${activeBackend === 'webgpu' ? 'WebGPU' : 'WASM'})`,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Local AI inference failed.';
+    const message = formatLoadError(err);
     post({
       type: 'error',
       requestId: msg.requestId,
@@ -290,7 +311,7 @@ self.onmessage = async (event: MessageEvent<WorkerInboundMessage>) => {
     try {
       await ensureModelLoaded(msg.modelId, msg.devicePreference);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load local AI model.';
+      const message = formatLoadError(err);
       post({
         type: 'status',
         status: 'error',

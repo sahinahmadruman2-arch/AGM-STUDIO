@@ -2,7 +2,11 @@ import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { AttachmentItem } from '../types';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+try {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+} catch {
+  // Fallback handled safely if PDF.js worker registration fails on unsupported runtimes
+}
 
 const MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024; // 15 MB
 const MAX_EXTRACTED_CHARS = 120000;
@@ -28,6 +32,10 @@ async function extractPdfText(file: File): Promise<{
   pageCount: number;
   description: string;
 }> {
+  if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+  }
+
   const arrayBuffer = await file.arrayBuffer();
   const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) });
   const pdf = await loadingTask.promise;
@@ -63,7 +71,11 @@ async function extractPdfText(file: File): Promise<{
 
       if (lastY !== null && currentY !== null && Math.abs(currentY - lastY) > 5) {
         strings.push('\n');
-      } else if (strings.length > 0 && !strings[strings.length - 1].endsWith('\n') && !str.startsWith(' ')) {
+      } else if (
+        strings.length > 0 &&
+        !strings[strings.length - 1].endsWith('\n') &&
+        !str.startsWith(' ')
+      ) {
         strings.push(' ');
       }
 
@@ -85,9 +97,13 @@ async function extractPdfText(file: File): Promise<{
     .join('\n\n')
     .slice(0, MAX_EXTRACTED_CHARS);
 
-  const nonEmptyPages = pages.filter((p) => !p.startsWith('[Page ') || !p.endsWith('No selectable text found]'));
+  const nonEmptyPages = pages.filter(
+    (p) => !p.startsWith('[Page ') || !p.endsWith('No selectable text found]')
+  );
   if (nonEmptyPages.length === 0) {
-    throw new Error('No extractable text was found in this PDF. It may be a scanned image-only PDF.');
+    throw new Error(
+      'No selectable text was found in this PDF. Scanned image-only PDFs require OCR.'
+    );
   }
 
   return {
@@ -98,21 +114,32 @@ async function extractPdfText(file: File): Promise<{
   };
 }
 
-function extractHtmlText(rawHtml: string, fallbackName: string): {
+export function extractReadableHtmlText(rawHtml: string, fallbackName: string): {
+  title: string;
   content: string;
   description: string;
 } {
   const parser = new DOMParser();
   const doc = parser.parseFromString(rawHtml, 'text/html');
-  const title = doc.querySelector('title')?.textContent?.trim() || fallbackName;
+  const title =
+    doc.querySelector('meta[property="og:title"]')?.getAttribute('content')?.trim() ||
+    doc.querySelector('title')?.textContent?.trim() ||
+    doc.querySelector('h1')?.textContent?.trim() ||
+    fallbackName;
 
-  const noiseSelectors = 'script, style, noscript, iframe, svg, canvas, nav, footer, aside';
+  const description =
+    doc.querySelector('meta[name="description"]')?.getAttribute('content')?.trim() ||
+    doc.querySelector('meta[property="og:description"]')?.getAttribute('content')?.trim() ||
+    `HTML document · ${title}`;
+
+  const noiseSelectors =
+    'script, style, noscript, iframe, svg, canvas, video, audio, form, button, input, select, textarea, nav, header, footer, aside, [role="navigation"], [role="banner"], [role="contentinfo"], [aria-hidden="true"]';
   doc.querySelectorAll(noiseSelectors).forEach((el) => el.remove());
 
   const main = doc.querySelector('main, article, [role="main"]') ?? doc.body;
   const blocks: string[] = [];
 
-  main?.querySelectorAll('h1, h2, h3, h4, p, li, pre, blockquote').forEach((el) => {
+  main?.querySelectorAll('h1, h2, h3, h4, p, li, pre, blockquote, td, th').forEach((el) => {
     const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
     if (!text) return;
     const tag = el.tagName.toLowerCase();
@@ -120,6 +147,8 @@ function extractHtmlText(rawHtml: string, fallbackName: string): {
       blocks.push(`## ${text}`);
     } else if (tag === 'li') {
       blocks.push(`- ${text}`);
+    } else if (tag === 'blockquote') {
+      blocks.push(`> ${text}`);
     } else {
       blocks.push(text);
     }
@@ -133,13 +162,21 @@ function extractHtmlText(rawHtml: string, fallbackName: string): {
       .trim();
   }
 
-  if (!content) {
-    throw new Error('No readable text content found in this HTML file.');
+  const deduped = content
+    .split('\n')
+    .filter((line, idx, arr) => idx === 0 || line !== arr[idx - 1])
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  if (!deduped) {
+    throw new Error('No readable text content found in this HTML.');
   }
 
   return {
-    content: content.slice(0, MAX_EXTRACTED_CHARS),
-    description: `HTML document · ${title}`,
+    title,
+    content: deduped.slice(0, MAX_EXTRACTED_CHARS),
+    description,
   };
 }
 
@@ -158,24 +195,34 @@ export async function processUploadedDocument(file: File): Promise<AttachmentIte
 
   const kind = detectFileKind(file);
   if (!kind) {
-    throw new Error(`Unsupported file type for "${file.name}". Please upload a PDF, TXT, or HTML file.`);
+    throw new Error(
+      `Unsupported file type for "${file.name}". Please upload a PDF, TXT, or HTML file.`
+    );
   }
 
   if (kind === 'pdf') {
-    const pdfData = await extractPdfText(file);
-    return {
-      id: crypto.randomUUID(),
-      kind: 'pdf',
-      name: file.name,
-      content: pdfData.content,
-      pages: pdfData.pages,
-      pageCount: pdfData.pageCount,
-      sizeBytes: file.size,
-      wordCount: countWords(pdfData.content),
-      charCount: pdfData.content.length,
-      description: pdfData.description,
-      addedAt: Date.now(),
-    };
+    try {
+      const pdfData = await extractPdfText(file);
+      return {
+        id: crypto.randomUUID(),
+        kind: 'pdf',
+        name: file.name,
+        content: pdfData.content,
+        pages: pdfData.pages,
+        pageCount: pdfData.pageCount,
+        sizeBytes: file.size,
+        wordCount: countWords(pdfData.content),
+        charCount: pdfData.content.length,
+        description: pdfData.description,
+        addedAt: Date.now(),
+      };
+    } catch (err) {
+      throw new Error(
+        err instanceof Error
+          ? `PDF parsing failed: ${err.message}`
+          : 'Unable to parse this PDF file in the browser.'
+      );
+    }
   }
 
   const rawText = await file.text();
@@ -184,7 +231,7 @@ export async function processUploadedDocument(file: File): Promise<AttachmentIte
   }
 
   if (kind === 'html') {
-    const htmlData = extractHtmlText(rawText, file.name);
+    const htmlData = extractReadableHtmlText(rawText, file.name);
     return {
       id: crypto.randomUUID(),
       kind: 'html',

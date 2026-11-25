@@ -4,14 +4,13 @@ import {
   Globe,
   Send,
   Square,
-  Cloud,
   Cpu,
   X,
   FileText,
   Eye,
   Loader2,
 } from 'lucide-react';
-import type { AiMode, AttachmentItem, LocalEngineState } from '../types';
+import type { AttachmentItem, LocalEngineState } from '../types';
 
 interface ComposerProps {
   input: string;
@@ -25,10 +24,8 @@ interface ComposerProps {
   onRemoveAttachment: (id: string) => void;
   onPreviewAttachment: (attachment: AttachmentItem) => void;
   onOpenWebsiteReader: () => void;
-  aiMode: AiMode;
-  cloudModelLabel: string;
   localState: LocalEngineState;
-  onToggleMode: () => void;
+  onOpenSettings: () => void;
 }
 
 export function Composer({
@@ -43,10 +40,8 @@ export function Composer({
   onRemoveAttachment,
   onPreviewAttachment,
   onOpenWebsiteReader,
-  aiMode,
-  cloudModelLabel,
   localState,
-  onToggleMode,
+  onOpenSettings,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -75,6 +70,7 @@ export function Composer({
   };
 
   const canSend = !isGenerating && input.trim().length > 0;
+  const modelShortName = localState.modelId.split('/').pop() || 'SmolLM2-360M-Instruct';
 
   return (
     <div className="border-t border-slate-200 dark:border-white/10 bg-white/80 dark:bg-[#080D1A]/85 backdrop-blur-xl px-3 sm:px-6 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
@@ -129,10 +125,8 @@ export function Composer({
             onKeyDown={handleKeyDown}
             placeholder={
               attachments.length > 0
-                ? 'Ask a question about your attached documents or websites...'
-                : aiMode === 'local'
-                  ? 'Message Local AI (SmolLM2-360M runs in your browser)...'
-                  : 'Message AGM Studio...'
+                ? 'Ask a question about your attached documents or website...'
+                : `Message ${modelShortName} (runs locally in your browser)...`
             }
             aria-label="Message input"
             className="w-full resize-none bg-transparent px-4 pt-3.5 pb-2 text-[15px] text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none max-h-[180px]"
@@ -169,7 +163,7 @@ export function Composer({
                 type="button"
                 onClick={onOpenWebsiteReader}
                 className="min-h-[44px] px-2.5 sm:px-3 rounded-xl text-xs font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                title="Read public website URL"
+                title="Read public website URL in browser"
                 aria-label="Open website reader"
               >
                 <Globe className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
@@ -178,26 +172,16 @@ export function Composer({
 
               <button
                 type="button"
-                onClick={onToggleMode}
+                onClick={onOpenSettings}
                 className="min-h-[44px] px-2.5 sm:px-3 rounded-xl text-xs font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap min-w-0 cursor-pointer"
-                title="Click to switch between Cloud AI and Local AI"
-                aria-label="Switch AI mode"
+                title="Configure Local AI model & WebGPU/WASM backend"
+                aria-label="Open engine settings"
               >
-                {aiMode === 'local' ? (
-                  <>
-                    <Cpu className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                    <span className="truncate max-w-[110px] sm:max-w-[160px]">
-                      Local{localState.backend ? ` · ${localState.backend.toUpperCase()}` : ''}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <Cloud className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                    <span className="truncate max-w-[110px] sm:max-w-[170px]">
-                      {cloudModelLabel}
-                    </span>
-                  </>
-                )}
+                <Cpu className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span className="truncate max-w-[115px] sm:max-w-[180px]">
+                  {modelShortName}
+                  {localState.backend ? ` · ${localState.backend.toUpperCase()}` : ''}
+                </span>
               </button>
             </div>
 

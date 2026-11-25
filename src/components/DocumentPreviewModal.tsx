@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { FileText, Globe, X, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react';
 import type { AttachmentItem } from '../types';
-import { formatBytes } from '../services/storage';
+import { formatBytes } from '../lib/database';
 
 interface DocumentPreviewModalProps {
   attachment: AttachmentItem | null;

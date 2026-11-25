@@ -7,28 +7,38 @@ const STORE_SETTINGS = 'settings';
 const SETTINGS_KEY = 'app-settings';
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  aiMode: 'local',
   theme: 'dark',
-  cloudProvider: 'gemini',
-  cloudModel: 'gemini-4-hydrogen',
-  thinkingDepth: 'MEDIUM',
-  customEndpointUrl: 'http://localhost:11434/v1/chat/completions',
-  customModelName: 'llama3.2',
   systemPrompt:
-    'You are AGM Studio, a precise, helpful AI assistant. Use clear formatting, verify context from any attached documents or websites, and state uncertainty honestly.',
+    'You are AGM Studio, a helpful AI assistant running locally in the user browser. Keep answers clear, concise, and grounded in any attached context. If a request exceeds what a compact local model can reliably verify, state that honestly.',
   localModelId: 'HuggingFaceTB/SmolLM2-360M-Instruct',
   localDevicePreference: 'auto',
   localMaxTokens: 512,
+  temperature: 0.6,
 };
+
+// In-memory fallback when IndexedDB is unavailable (e.g., restricted private browsing)
+const memoryConversations = new Map<string, Conversation>();
+let memorySettings: AppSettings | null = null;
+let storageMode: 'indexeddb' | 'memory' = 'indexeddb';
+
+export function getStorageMode(): 'indexeddb' | 'memory' {
+  return storageMode;
+}
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (typeof indexedDB === 'undefined') {
-      reject(new Error('IndexedDB is not available in this browser environment.'));
+      reject(new Error('IndexedDB is not supported in this browser context.'));
       return;
     }
 
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    let request: IDBOpenDBRequest;
+    try {
+      request = indexedDB.open(DB_NAME, DB_VERSION);
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error('Failed to open IndexedDB.'));
+      return;
+    }
 
     request.onupgradeneeded = () => {
       const db = request.result;
@@ -41,7 +51,10 @@ function openDatabase(): Promise<IDBDatabase> {
       }
     };
 
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      storageMode = 'indexeddb';
+      resolve(request.result);
+    };
     request.onerror = () => reject(request.error ?? new Error('Failed to open IndexedDB.'));
   });
 }
@@ -61,20 +74,26 @@ export async function loadSettings(): Promise<AppSettings> {
       tx.oncomplete = () => db.close();
     });
   } catch {
-    return { ...DEFAULT_SETTINGS };
+    storageMode = 'memory';
+    return memorySettings ? { ...DEFAULT_SETTINGS, ...memorySettings } : { ...DEFAULT_SETTINGS };
   }
 }
 
 export async function saveSettings(settings: AppSettings): Promise<void> {
-  const db = await openDatabase();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE_SETTINGS, 'readwrite');
-    const store = tx.objectStore(STORE_SETTINGS);
-    const req = store.put({ key: SETTINGS_KEY, value: settings });
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error ?? new Error('Failed to save settings.'));
-    tx.oncomplete = () => db.close();
-  });
+  memorySettings = { ...settings };
+  try {
+    const db = await openDatabase();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_SETTINGS, 'readwrite');
+      const store = tx.objectStore(STORE_SETTINGS);
+      const req = store.put({ key: SETTINGS_KEY, value: settings });
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error ?? new Error('Failed to save settings.'));
+      tx.oncomplete = () => db.close();
+    });
+  } catch {
+    storageMode = 'memory';
+  }
 }
 
 export async function listConversations(): Promise<Conversation[]> {
@@ -87,77 +106,104 @@ export async function listConversations(): Promise<Conversation[]> {
       req.onsuccess = () => {
         const items = (req.result as Conversation[]) ?? [];
         items.sort((a, b) => b.updatedAt - a.updatedAt);
+        items.forEach((c) => memoryConversations.set(c.id, c));
         resolve(items);
       };
       req.onerror = () => reject(req.error ?? new Error('Failed to load conversations.'));
       tx.oncomplete = () => db.close();
     });
   } catch {
-    return [];
+    storageMode = 'memory';
+    return Array.from(memoryConversations.values()).sort((a, b) => b.updatedAt - a.updatedAt);
   }
 }
 
 export async function saveConversation(conversation: Conversation): Promise<void> {
-  const db = await openDatabase();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE_CONVERSATIONS, 'readwrite');
-    const store = tx.objectStore(STORE_CONVERSATIONS);
-    const req = store.put(conversation);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error ?? new Error('Failed to save conversation.'));
-    tx.oncomplete = () => db.close();
-  });
+  memoryConversations.set(conversation.id, conversation);
+  try {
+    const db = await openDatabase();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_CONVERSATIONS, 'readwrite');
+      const store = tx.objectStore(STORE_CONVERSATIONS);
+      const req = store.put(conversation);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error ?? new Error('Failed to save conversation.'));
+      tx.oncomplete = () => db.close();
+    });
+  } catch {
+    storageMode = 'memory';
+  }
 }
 
 export async function deleteConversation(id: string): Promise<void> {
-  const db = await openDatabase();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE_CONVERSATIONS, 'readwrite');
-    const store = tx.objectStore(STORE_CONVERSATIONS);
-    const req = store.delete(id);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error ?? new Error('Failed to delete conversation.'));
-    tx.oncomplete = () => db.close();
-  });
+  memoryConversations.delete(id);
+  try {
+    const db = await openDatabase();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_CONVERSATIONS, 'readwrite');
+      const store = tx.objectStore(STORE_CONVERSATIONS);
+      const req = store.delete(id);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error ?? new Error('Failed to delete conversation.'));
+      tx.oncomplete = () => db.close();
+    });
+  } catch {
+    storageMode = 'memory';
+  }
 }
 
 export async function clearAllConversations(): Promise<void> {
-  const db = await openDatabase();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE_CONVERSATIONS, 'readwrite');
-    const store = tx.objectStore(STORE_CONVERSATIONS);
-    const req = store.clear();
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error ?? new Error('Failed to clear conversations.'));
-    tx.oncomplete = () => db.close();
-  });
+  memoryConversations.clear();
+  try {
+    const db = await openDatabase();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_CONVERSATIONS, 'readwrite');
+      const store = tx.objectStore(STORE_CONVERSATIONS);
+      const req = store.clear();
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error ?? new Error('Failed to clear conversations.'));
+      tx.oncomplete = () => db.close();
+    });
+  } catch {
+    storageMode = 'memory';
+  }
 }
 
 export async function clearModelCache(): Promise<void> {
-  if (typeof caches === 'undefined') return;
-  const keys = await caches.keys();
-  await Promise.all(
-    keys
-      .filter((k) => k.toLowerCase().includes('transformers'))
-      .map((k) => caches.delete(k))
-  );
+  try {
+    if (typeof caches === 'undefined') return;
+    const keys = await caches.keys();
+    await Promise.all(
+      keys
+        .filter((k) => k.toLowerCase().includes('transformers'))
+        .map((k) => caches.delete(k))
+    );
+  } catch {
+    // Ignore cache clear failure
+  }
 }
 
 export async function clearAllLocalData(): Promise<void> {
-  const db = await openDatabase();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction([STORE_CONVERSATIONS, STORE_SETTINGS], 'readwrite');
-    tx.objectStore(STORE_CONVERSATIONS).clear();
-    tx.objectStore(STORE_SETTINGS).clear();
-    tx.oncomplete = () => {
-      db.close();
-      resolve();
-    };
-    tx.onerror = () => {
-      db.close();
-      reject(tx.error ?? new Error('Failed to clear local data.'));
-    };
-  });
+  memoryConversations.clear();
+  memorySettings = null;
+  try {
+    const db = await openDatabase();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction([STORE_CONVERSATIONS, STORE_SETTINGS], 'readwrite');
+      tx.objectStore(STORE_CONVERSATIONS).clear();
+      tx.objectStore(STORE_SETTINGS).clear();
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => {
+        db.close();
+        reject(tx.error ?? new Error('Failed to clear local data.'));
+      };
+    });
+  } catch {
+    storageMode = 'memory';
+  }
   await clearModelCache();
 }
 
@@ -203,6 +249,7 @@ export async function getStorageSummary(): Promise<StorageSummary> {
   }
 
   return {
+    storageMode,
     conversationCount: conversations.length,
     messageCount,
     indexedDbEstimateBytes,

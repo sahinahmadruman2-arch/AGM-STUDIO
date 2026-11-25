@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Check, Copy, RotateCcw, AlertCircle, FileText, Globe, Cloud, Cpu } from 'lucide-react';
+import { Check, Copy, RotateCcw, AlertCircle, FileText, Globe, Cpu } from 'lucide-react';
 import type { ChatMessage } from '../types';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
@@ -75,22 +75,23 @@ export function MessageBubble({
   return (
     <div className="flex justify-start">
       <div className="w-full max-w-[96%] sm:max-w-[86%] flex flex-col gap-1.5">
-        {/* Clean unboxed assistant header metadata */}
-        <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 px-1">
+        <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 px-1 flex-wrap">
           <span className="inline-flex items-center gap-1.5 font-medium text-slate-700 dark:text-slate-300">
-            {message.mode === 'local' ? (
-              <Cpu className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-            ) : (
-              <Cloud className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-            )}
+            <Cpu className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
             <span>AGM Studio</span>
           </span>
           <span aria-hidden="true">·</span>
-          <span>{message.mode === 'local' ? 'Local AI' : 'Cloud AI'}</span>
+          <span>Browser AI</span>
           {message.model && (
             <>
               <span aria-hidden="true">·</span>
               <span className="font-mono text-[11px] truncate max-w-[180px]">{message.model}</span>
+            </>
+          )}
+          {message.backend && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="font-mono text-[11px] uppercase">{message.backend}</span>
             </>
           )}
           <span aria-hidden="true">·</span>
@@ -102,7 +103,7 @@ export function MessageBubble({
             <div className="flex items-start gap-2.5 text-sm text-rose-600 dark:text-rose-400">
               <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
               <div className="space-y-1">
-                <p className="font-medium">Generation failed</p>
+                <p className="font-medium">Local inference error</p>
                 <p className="text-xs leading-relaxed opacity-90">{message.error}</p>
               </div>
             </div>
@@ -113,11 +114,7 @@ export function MessageBubble({
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-bounce [animation-delay:-0.1s]" />
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-bounce" />
               </span>
-              <span>
-                {message.mode === 'local'
-                  ? 'Running local inference...'
-                  : 'Generating response...'}
-              </span>
+              <span>Preparing response in Web Worker...</span>
             </div>
           ) : (
             <>
@@ -137,7 +134,6 @@ export function MessageBubble({
           )}
         </div>
 
-        {/* Action controls */}
         {!isStreaming && (
           <div className="flex items-center gap-2 px-1">
             {message.content && (

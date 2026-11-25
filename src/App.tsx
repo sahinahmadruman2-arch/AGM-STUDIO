@@ -7,13 +7,13 @@ import {
   AlertCircle,
   X,
   ArrowDown,
+  WifiOff,
 } from 'lucide-react';
 import type {
-  AiMode,
   AppSettings,
   AttachmentItem,
+  BrowserCapabilities,
   ChatMessage,
-  CloudHealthInfo,
   Conversation,
   LocalEngineState,
 } from './types';
@@ -22,15 +22,15 @@ import {
   clearAllConversations,
   clearAllLocalData,
   deleteConversation,
+  getStorageMode,
   listConversations,
   loadSettings,
   saveConversation,
   saveSettings,
-} from './services/storage';
-import { fetchCloudHealth } from './services/cloudAi';
-import { localAiManager } from './services/localAi';
-import { deriveConversationTitle, generateAssistantReply } from './services/chatEngine';
-import { processUploadedDocument } from './services/documentReader';
+} from './lib/database';
+import { detectBrowserCapabilities, localAiManager } from './lib/local-ai';
+import { deriveConversationTitle, generateAssistantReply } from './lib/chat-engine';
+import { processUploadedDocument } from './lib/document-reader';
 import { Sidebar } from './components/Sidebar';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { MessageBubble } from './components/MessageBubble';
@@ -38,15 +38,6 @@ import { Composer } from './components/Composer';
 import { WebsiteReaderModal } from './components/WebsiteReaderModal';
 import { DocumentPreviewModal } from './components/DocumentPreviewModal';
 import { SettingsModal } from './components/SettingsModal';
-
-function getCloudModelDisplayName(settings: AppSettings): string {
-  if (settings.cloudProvider === 'openai-compatible') {
-    return settings.customModelName || 'Custom Model';
-  }
-  return settings.cloudModel === 'gemini-3.1-flash-lite'
-    ? 'Gemini 3.1 Flash Lite'
-    : 'Gemini 4 Hydrogen';
-}
 
 export default function App() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
@@ -56,8 +47,12 @@ export default function App() {
   const [input, setInput] = useState('');
   const [isHydrated, setIsHydrated] = useState(false);
 
-  const [cloudHealth, setCloudHealth] = useState<CloudHealthInfo | null>(null);
   const [localState, setLocalState] = useState<LocalEngineState>(() => localAiManager.getState());
+  const [capabilities, setCapabilities] = useState<BrowserCapabilities | null>(null);
+  const [isOnline, setIsOnline] = useState<boolean>(
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
+  const [storageWarning, setStorageWarning] = useState<string | null>(null);
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
@@ -75,53 +70,57 @@ export default function App() {
   const shouldAutoScrollRef = useRef(true);
   const streamingContentRef = useRef('');
 
-  // Load IndexedDB settings & conversations + subscribe to Local AI worker
   useEffect(() => {
     let mounted = true;
-    (async () => {
-      const [loadedSettings, loadedConvs] = await Promise.all([
-        loadSettings(),
-        listConversations(),
-      ]);
-      if (!mounted) return;
-      setSettings(loadedSettings);
-      setConversations(loadedConvs);
-      if (loadedConvs.length > 0) {
-        setActiveConversationId(loadedConvs[0].id);
-      }
-      setIsHydrated(true);
-    })();
 
-    fetchCloudHealth()
-      .then((info) => {
+    (async () => {
+      try {
+        const [loadedSettings, loadedConvs, caps] = await Promise.all([
+          loadSettings(),
+          listConversations(),
+          detectBrowserCapabilities(),
+        ]);
         if (!mounted) return;
-        setCloudHealth(info);
-        if (!info.cloudAvailable) {
-          setSettings((prev) => {
-            if (prev.aiMode === 'cloud' && prev.cloudProvider === 'gemini') {
-              const next = { ...prev, aiMode: 'local' as AiMode };
-              void saveSettings(next);
-              return next;
-            }
-            return prev;
-          });
+        setSettings(loadedSettings);
+        setConversations(loadedConvs);
+        setCapabilities(caps);
+        if (loadedConvs.length > 0) {
+          setActiveConversationId(loadedConvs[0].id);
         }
-      })
-      .catch(() => {
-        // Server health probe failed silently
-      });
+        if (getStorageMode() === 'memory') {
+          setStorageWarning(
+            'IndexedDB is restricted in this browser session. Chats will stay available until this tab closes.'
+          );
+        }
+        void localAiManager.checkModelCached(loadedSettings.localModelId);
+      } catch (err) {
+        if (mounted) {
+          setBannerError(
+            err instanceof Error ? err.message : 'Failed to initialize local workspace storage.'
+          );
+        }
+      } finally {
+        if (mounted) setIsHydrated(true);
+      }
+    })();
 
     const unsubscribe = localAiManager.subscribe((state) => {
       setLocalState(state);
     });
 
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
     return () => {
       mounted = false;
       unsubscribe();
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
     };
   }, []);
 
-  // Sync Tailwind .dark class on <html>
   useEffect(() => {
     const root = document.documentElement;
     if (settings.theme === 'dark') {
@@ -144,6 +143,9 @@ export default function App() {
     setSettings((prev) => {
       const next = { ...prev, ...patch };
       void saveSettings(next);
+      if (patch.localModelId) {
+        void localAiManager.checkModelCached(patch.localModelId);
+      }
       return next;
     });
   }, []);
@@ -332,7 +334,13 @@ export default function App() {
         settings,
         onChunk: (delta) => {
           streamingContentRef.current += delta;
-          patchAssistantMessage({ content: streamingContentRef.current }, false);
+          patchAssistantMessage(
+            {
+              content: streamingContentRef.current,
+              backend: localAiManager.getState().backend,
+            },
+            false
+          );
           if (shouldAutoScrollRef.current) {
             scrollToBottom('auto');
           }
@@ -344,6 +352,7 @@ export default function App() {
           patchAssistantMessage(
             {
               content: streamingContentRef.current,
+              backend: localAiManager.getState().backend,
               isStopped: interrupted,
             },
             true
@@ -403,11 +412,8 @@ export default function App() {
         role: 'assistant',
         content: '',
         createdAt: now + 1,
-        mode: settings.aiMode,
-        model:
-          settings.aiMode === 'local'
-            ? localModelShort
-            : getCloudModelDisplayName(settings),
+        model: localModelShort,
+        backend: localState.backend,
       };
 
       let targetConv: Conversation;
@@ -418,7 +424,6 @@ export default function App() {
             activeConversation.messages.length === 0
               ? deriveConversationTitle(trimmed)
               : activeConversation.title,
-          mode: settings.aiMode,
           attachments: baseAttachments,
           messages: [...activeConversation.messages, userMessage, assistantMessage],
           updatedAt: now,
@@ -429,7 +434,6 @@ export default function App() {
           title: deriveConversationTitle(trimmed),
           createdAt: now,
           updatedAt: now,
-          mode: settings.aiMode,
           attachments: baseAttachments,
           messages: [userMessage, assistantMessage],
         };
@@ -445,7 +449,8 @@ export default function App() {
       isGenerating,
       activeConversation,
       draftAttachments,
-      settings,
+      settings.localModelId,
+      localState.backend,
       persistConversationUpdate,
       runAssistantGeneration,
     ]
@@ -469,23 +474,26 @@ export default function App() {
       role: 'assistant',
       content: '',
       createdAt: Date.now(),
-      mode: settings.aiMode,
-      model:
-        settings.aiMode === 'local'
-          ? localModelShort
-          : getCloudModelDisplayName(settings),
+      model: localModelShort,
+      backend: localState.backend,
     };
 
     const updatedConv: Conversation = {
       ...activeConversation,
-      mode: settings.aiMode,
       messages: [...messages, newAssistantMsg],
       updatedAt: Date.now(),
     };
 
     persistConversationUpdate(updatedConv);
     runAssistantGeneration(updatedConv, assistantId);
-  }, [activeConversation, isGenerating, settings, persistConversationUpdate, runAssistantGeneration]);
+  }, [
+    activeConversation,
+    isGenerating,
+    settings.localModelId,
+    localState.backend,
+    persistConversationUpdate,
+    runAssistantGeneration,
+  ]);
 
   const handleStop = useCallback(() => {
     stopRef.current?.();
@@ -500,13 +508,6 @@ export default function App() {
       }
     },
     [handleAttachItem, sendPrompt]
-  );
-
-  const handleSwitchMode = useCallback(
-    (mode: AiMode) => {
-      updateSettings({ aiMode: mode });
-    },
-    [updateSettings]
   );
 
   const handleClearAllConversations = useCallback(async () => {
@@ -527,7 +528,7 @@ export default function App() {
     setSettings({ ...DEFAULT_SETTINGS });
   }, [isGenerating]);
 
-  const cloudModelLabel = getCloudModelDisplayName(settings);
+  const modelShortName = settings.localModelId.split('/').pop() || 'SmolLM2-360M-Instruct';
   const messages = activeConversation?.messages ?? [];
   const lastAssistantId = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -543,14 +544,16 @@ export default function App() {
         onClose={() => setIsSidebarOpen(false)}
         conversations={conversations}
         activeConversationId={activeConversationId}
-        aiMode={settings.aiMode}
         theme={settings.theme}
         localState={localState}
+        isOnline={isOnline}
         onNewChat={handleNewChat}
         onSelectConversation={handleSelectConversation}
         onRenameConversation={handleRenameConversation}
         onDeleteConversation={handleDeleteConversation}
-        onChangeMode={handleSwitchMode}
+        onInitializeModel={() =>
+          localAiManager.loadModel(settings.localDevicePreference, settings.localModelId)
+        }
         onToggleTheme={() =>
           updateSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' })
         }
@@ -579,14 +582,20 @@ export default function App() {
                 ·
               </span>
               <span className="hidden md:inline text-xs text-slate-500 dark:text-slate-400 truncate whitespace-nowrap">
-                {settings.aiMode === 'local'
-                  ? `Local AI · ${settings.localModelId.split('/').pop()}${localState.backend ? ` (${localState.backend.toUpperCase()})` : ''}`
-                  : `Cloud AI · ${cloudModelLabel}`}
+                {modelShortName}
+                {localState.backend ? ` (${localState.backend.toUpperCase()})` : ''}
               </span>
             </div>
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
+            {!isOnline && (
+              <span className="hidden sm:inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 px-2">
+                <WifiOff className="w-3.5 h-3.5" />
+                <span>Offline</span>
+              </span>
+            )}
+
             <button
               type="button"
               onClick={() => setIsWebsiteReaderOpen(true)}
@@ -622,13 +631,28 @@ export default function App() {
           </div>
         </header>
 
-        {/* Local AI Downloading Banner */}
-        {settings.aiMode === 'local' && localState.status === 'loading' && (
+        {/* Local Model Downloading Banner */}
+        {localState.status === 'loading' && (
           <div className="px-4 py-2 border-b border-emerald-500/20 bg-emerald-500/10 text-xs text-emerald-800 dark:text-emerald-200 flex items-center justify-between gap-3 shrink-0">
             <span className="truncate">{localState.progressDetail}</span>
             <span className="font-mono tabular-nums font-medium shrink-0">
               {localState.progressPercent}%
             </span>
+          </div>
+        )}
+
+        {/* Storage Fallback Notice */}
+        {storageWarning && (
+          <div className="px-4 py-2 border-b border-amber-500/30 bg-amber-500/10 text-xs text-amber-800 dark:text-amber-200 flex items-center justify-between gap-3 shrink-0">
+            <span className="truncate">{storageWarning}</span>
+            <button
+              type="button"
+              onClick={() => setStorageWarning(null)}
+              className="min-h-[28px] min-w-[28px] flex items-center justify-center rounded-lg hover:bg-amber-500/15 cursor-pointer shrink-0"
+              aria-label="Dismiss storage notice"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
         )}
 
@@ -653,12 +677,10 @@ export default function App() {
         {/* Messages Feed or Welcome Screen */}
         {!isHydrated ? (
           <div className="flex-1 flex items-center justify-center text-sm text-slate-500 dark:text-slate-400">
-            Loading workspace...
+            Loading browser workspace...
           </div>
         ) : messages.length === 0 ? (
           <WelcomeScreen
-            aiMode={settings.aiMode}
-            cloudModelLabel={cloudModelLabel}
             localState={localState}
             onSelectPrompt={(prompt) => sendPrompt(prompt)}
             onOpenDocumentUpload={() => {
@@ -666,7 +688,9 @@ export default function App() {
               inputEl?.click();
             }}
             onOpenWebsiteReader={() => setIsWebsiteReaderOpen(true)}
-            onSwitchMode={handleSwitchMode}
+            onInitializeModel={() =>
+              localAiManager.loadModel(settings.localDevicePreference, settings.localModelId)
+            }
           />
         ) : (
           <div
@@ -715,12 +739,8 @@ export default function App() {
           onRemoveAttachment={handleRemoveAttachment}
           onPreviewAttachment={setPreviewAttachment}
           onOpenWebsiteReader={() => setIsWebsiteReaderOpen(true)}
-          aiMode={settings.aiMode}
-          cloudModelLabel={cloudModelLabel}
           localState={localState}
-          onToggleMode={() =>
-            handleSwitchMode(settings.aiMode === 'cloud' ? 'local' : 'cloud')
-          }
+          onOpenSettings={() => setIsSettingsOpen(true)}
         />
       </div>
 
@@ -742,8 +762,8 @@ export default function App() {
         onClose={() => setIsSettingsOpen(false)}
         settings={settings}
         onUpdateSettings={updateSettings}
-        cloudHealth={cloudHealth}
         localState={localState}
+        capabilities={capabilities}
         onLoadLocalModel={() =>
           localAiManager.loadModel(settings.localDevicePreference, settings.localModelId)
         }

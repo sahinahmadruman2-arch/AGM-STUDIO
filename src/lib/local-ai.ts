@@ -1,7 +1,12 @@
-import type { LocalDevicePreference, LocalEngineState, LocalModelId } from '../types';
-import { formatBytes } from './storage';
+import type {
+  BrowserCapabilities,
+  LocalDevicePreference,
+  LocalEngineState,
+  LocalModelId,
+} from '../types';
+import { formatBytes } from './database';
 
-export const LOCAL_MODEL_ID: LocalModelId = 'HuggingFaceTB/SmolLM2-360M-Instruct';
+export const DEFAULT_LOCAL_MODEL_ID: LocalModelId = 'HuggingFaceTB/SmolLM2-360M-Instruct';
 
 type Listener = (state: LocalEngineState) => void;
 
@@ -12,6 +17,30 @@ interface ActiveRequest {
   onError: (message: string) => void;
 }
 
+export async function detectBrowserCapabilities(): Promise<BrowserCapabilities> {
+  let webGpu = false;
+  try {
+    const nav = navigator as Navigator & {
+      gpu?: { requestAdapter: () => Promise<unknown | null> };
+    };
+    if (nav?.gpu) {
+      const adapter = await nav.gpu.requestAdapter();
+      webGpu = Boolean(adapter);
+    }
+  } catch {
+    webGpu = false;
+  }
+
+  return {
+    webGpu,
+    webAssembly: typeof WebAssembly === 'object',
+    webWorker: typeof Worker !== 'undefined',
+    indexedDb: typeof indexedDB !== 'undefined',
+    cacheApi: typeof caches !== 'undefined',
+    online: typeof navigator !== 'undefined' ? navigator.onLine : true,
+  };
+}
+
 class LocalAiManager {
   private worker: Worker | null = null;
   private listeners = new Set<Listener>();
@@ -19,56 +48,80 @@ class LocalAiManager {
   private state: LocalEngineState = {
     status: 'idle',
     backend: null,
-    modelId: LOCAL_MODEL_ID,
+    modelId: DEFAULT_LOCAL_MODEL_ID,
     progressPercent: 0,
     progressFile: '',
-    progressDetail: 'Zero API keys · Downloads once & caches in your browser',
+    progressDetail: 'Not loaded · First download requires internet, then caches for offline use',
     error: null,
     isCachedLikely: false,
+    isSupported: typeof Worker !== 'undefined' && typeof WebAssembly === 'object',
   };
 
   constructor() {
     void this.checkModelCached();
   }
 
-  private async checkModelCached(modelId = this.state.modelId) {
+  async checkModelCached(modelId: LocalModelId = this.state.modelId): Promise<boolean> {
     try {
-      if (typeof caches === 'undefined') return;
+      if (typeof caches === 'undefined') return false;
       const keys = await caches.keys();
       const cacheKey = keys.find((k) => k.toLowerCase().includes('transformers'));
-      if (cacheKey) {
-        const cache = await caches.open(cacheKey);
-        const entries = await cache.keys();
-        const shortName = modelId.split('/').pop() || modelId;
-        const hasModel = entries.some((req) => req.url.includes(shortName));
-        if (hasModel) {
-          this.updateState({
-            isCachedLikely: true,
-            progressDetail: 'Cached in browser · Click Initialize or send a message',
-          });
-        }
+      if (!cacheKey) return false;
+      const cache = await caches.open(cacheKey);
+      const entries = await cache.keys();
+      const shortName = modelId.split('/').pop() || modelId;
+      const hasModel = entries.some((req) => req.url.includes(shortName));
+      if (hasModel) {
+        this.updateState({
+          isCachedLikely: true,
+          progressDetail:
+            this.state.status === 'idle'
+              ? 'Model weights cached in browser · Click Initialize or send a message'
+              : this.state.progressDetail,
+        });
       }
+      return hasModel;
     } catch {
-      // Ignore cache probe failure
+      return false;
     }
   }
 
   private ensureWorker(): Worker {
+    if (!this.state.isSupported) {
+      throw new Error(
+        'This browser does not support Web Workers and WebAssembly required for local AI inference.'
+      );
+    }
     if (!this.worker) {
-      this.worker = new Worker(new URL('../workers/localAi.worker.ts', import.meta.url), {
-        type: 'module',
-      });
+      try {
+        this.worker = new Worker(new URL('../workers/ai-worker.ts', import.meta.url), {
+          type: 'module',
+        });
+      } catch (err) {
+        const message =
+          err instanceof Error
+            ? `Failed to start AI Web Worker: ${err.message}`
+            : 'Failed to start AI Web Worker.';
+        this.updateState({
+          status: 'error',
+          error: message,
+          progressDetail: message,
+        });
+        throw new Error(message);
+      }
+
       this.worker.onmessage = (event: MessageEvent) => this.handleWorkerMessage(event.data);
       this.worker.onerror = (err) => {
-        const message = err.message || 'Local AI Web Worker crashed.';
+        const message = err.message || 'Local AI Web Worker encountered an error.';
         this.updateState({
           status: 'error',
           error: message,
           progressDetail: message,
         });
         if (this.activeRequest) {
-          this.activeRequest.onError(message);
+          const req = this.activeRequest;
           this.activeRequest = null;
+          req.onError(message);
         }
       };
     }
@@ -89,13 +142,16 @@ class LocalAiManager {
         status: 'loading',
         progressPercent: progress,
         progressFile: file,
-        progressDetail: file ? `Downloading ${file}${sizeText}` : 'Preparing local model...',
+        progressDetail: file ? `Downloading ${file}${sizeText}` : 'Preparing model assets...',
         error: null,
       });
     } else if (data.type === 'status') {
       const status = data.status as LocalEngineState['status'];
       const backend = (data.backend as LocalEngineState['backend']) ?? this.state.backend;
-      const modelId = typeof data.modelId === 'string' ? data.modelId : this.state.modelId;
+      const modelId =
+        typeof data.modelId === 'string'
+          ? (data.modelId as LocalModelId)
+          : this.state.modelId;
       const detail = typeof data.detail === 'string' ? data.detail : '';
       this.updateState({
         status,
@@ -112,7 +168,11 @@ class LocalAiManager {
         isCachedLikely: status === 'ready' ? true : this.state.isCachedLikely,
       });
     } else if (data.type === 'chunk') {
-      if (this.activeRequest && data.requestId === this.activeRequest.requestId && typeof data.text === 'string') {
+      if (
+        this.activeRequest &&
+        data.requestId === this.activeRequest.requestId &&
+        typeof data.text === 'string'
+      ) {
         this.activeRequest.onChunk(data.text);
       }
     } else if (data.type === 'done') {
@@ -122,7 +182,7 @@ class LocalAiManager {
         req.onDone(Boolean(data.interrupted));
       }
     } else if (data.type === 'error') {
-      const message = typeof data.message === 'string' ? data.message : 'Local AI error.';
+      const message = typeof data.message === 'string' ? data.message : 'Local AI inference error.';
       if (this.activeRequest && data.requestId === this.activeRequest.requestId) {
         const req = this.activeRequest;
         this.activeRequest = null;
@@ -148,16 +208,22 @@ class LocalAiManager {
     };
   }
 
-  loadModel(devicePreference: LocalDevicePreference, modelId: LocalModelId = LOCAL_MODEL_ID) {
-    this.updateState({ modelId });
-    const worker = this.ensureWorker();
-    worker.postMessage({ type: 'load', modelId, devicePreference });
+  loadModel(devicePreference: LocalDevicePreference, modelId: LocalModelId = DEFAULT_LOCAL_MODEL_ID) {
+    this.updateState({ modelId, error: null });
+    try {
+      const worker = this.ensureWorker();
+      worker.postMessage({ type: 'load', modelId, devicePreference });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to initialize local AI.';
+      this.updateState({ status: 'error', error: message, progressDetail: message });
+    }
   }
 
   generate(params: {
     modelId: LocalModelId;
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
     maxNewTokens: number;
+    temperature: number;
     devicePreference: LocalDevicePreference;
     onChunk: (delta: string) => void;
     onDone: (interrupted: boolean) => void;
@@ -166,8 +232,16 @@ class LocalAiManager {
     if (this.activeRequest) {
       this.stop();
     }
-    this.updateState({ modelId: params.modelId });
-    const worker = this.ensureWorker();
+    this.updateState({ modelId: params.modelId, error: null });
+
+    let worker: Worker;
+    try {
+      worker = this.ensureWorker();
+    } catch (err) {
+      params.onError(err instanceof Error ? err.message : 'Local AI worker unavailable.');
+      return;
+    }
+
     const requestId = crypto.randomUUID();
     this.activeRequest = {
       requestId,
@@ -175,12 +249,14 @@ class LocalAiManager {
       onDone: params.onDone,
       onError: params.onError,
     };
+
     worker.postMessage({
       type: 'generate',
       requestId,
       modelId: params.modelId,
       messages: params.messages,
       maxNewTokens: params.maxNewTokens,
+      temperature: params.temperature,
       devicePreference: params.devicePreference,
     });
   }

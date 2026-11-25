@@ -6,14 +6,15 @@ import {
   Trash2,
   Check,
   X,
-  Cloud,
   Cpu,
   Sun,
   Moon,
   Settings,
   Search,
+  Download,
+  Loader2,
 } from 'lucide-react';
-import type { AiMode, Conversation, LocalEngineState, ThemeMode } from '../types';
+import type { Conversation, LocalEngineState, ThemeMode } from '../types';
 import { Logo } from './Logo';
 
 interface SidebarProps {
@@ -21,14 +22,14 @@ interface SidebarProps {
   onClose: () => void;
   conversations: Conversation[];
   activeConversationId: string | null;
-  aiMode: AiMode;
   theme: ThemeMode;
   localState: LocalEngineState;
+  isOnline: boolean;
   onNewChat: () => void;
   onSelectConversation: (id: string) => void;
   onRenameConversation: (id: string, title: string) => void;
   onDeleteConversation: (id: string) => void;
-  onChangeMode: (mode: AiMode) => void;
+  onInitializeModel: () => void;
   onToggleTheme: () => void;
   onOpenSettings: () => void;
 }
@@ -38,14 +39,14 @@ export function Sidebar({
   onClose,
   conversations,
   activeConversationId,
-  aiMode,
   theme,
   localState,
+  isOnline,
   onNewChat,
   onSelectConversation,
   onRenameConversation,
   onDeleteConversation,
-  onChangeMode,
+  onInitializeModel,
   onToggleTheme,
   onOpenSettings,
 }: SidebarProps) {
@@ -76,6 +77,23 @@ export function Sidebar({
     setEditingId(null);
     setEditingTitle('');
   };
+
+  const modelShortName = localState.modelId.split('/').pop() || 'SmolLM2-360M-Instruct';
+
+  const statusLabel =
+    localState.status === 'loading'
+      ? `${localState.progressPercent}%`
+      : localState.status === 'ready'
+        ? localState.backend
+          ? localState.backend.toUpperCase()
+          : 'Ready'
+        : localState.status === 'generating'
+          ? 'Active'
+          : localState.status === 'error'
+            ? 'Error'
+            : localState.isCachedLikely
+              ? 'Cached'
+              : 'Standby';
 
   const sidebarContent = (
     <aside className="w-[280px] h-full flex flex-col border-r border-slate-200 dark:border-white/10 bg-white/95 dark:bg-[#080D1A]/95 backdrop-blur-xl select-none">
@@ -111,80 +129,52 @@ export function Sidebar({
         </button>
       </div>
 
-      {/* AI Mode Selector */}
+      {/* Browser Local AI Engine Card */}
       <div className="px-4 py-3 border-b border-slate-200 dark:border-white/10 space-y-2">
         <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-          <span className="font-medium">AI Engine Mode</span>
-          <span className="font-mono text-[11px] text-emerald-600 dark:text-emerald-400">
-            {aiMode === 'cloud'
-              ? 'Cloud'
-              : localState.status === 'ready' || localState.status === 'generating'
-                ? localState.backend?.toUpperCase() || 'Local'
-                : localState.status === 'loading'
-                  ? `${localState.progressPercent}%`
-                  : 'Local'}
+          <span className="inline-flex items-center gap-1.5 font-medium text-slate-700 dark:text-slate-200">
+            <Cpu className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            <span>Browser AI Engine</span>
+          </span>
+          <span className="font-mono text-[11px] tabular-nums text-emerald-600 dark:text-emerald-400">
+            {statusLabel}
           </span>
         </div>
 
-        <div
-          className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-slate-100 dark:bg-white/[0.04] border border-slate-200/70 dark:border-white/10"
-          role="group"
-          aria-label="AI Engine Mode"
-        >
-          <button
-            type="button"
-            onClick={() => onChangeMode('cloud')}
-            className={`min-h-[38px] px-2.5 py-1.5 rounded-lg text-xs font-medium inline-flex items-center justify-center gap-1.5 transition-all whitespace-nowrap cursor-pointer ${
-              aiMode === 'cloud'
-                ? 'bg-white dark:bg-[#131C31] text-slate-900 dark:text-white shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <Cloud className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-            <span>Cloud AI</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => onChangeMode('local')}
-            className={`min-h-[38px] px-2.5 py-1.5 rounded-lg text-xs font-medium inline-flex items-center justify-center gap-1.5 transition-all whitespace-nowrap cursor-pointer ${
-              aiMode === 'local'
-                ? 'bg-white dark:bg-[#131C31] text-slate-900 dark:text-white shadow-sm'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <Cpu className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-            <span>Local AI</span>
-          </button>
+        <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+          <span className="truncate font-mono">{modelShortName}</span>
+          <span className="shrink-0">{isOnline ? 'Online' : 'Offline'}</span>
         </div>
 
-        {aiMode === 'local' && (
-          <div className="text-[11px] text-slate-500 dark:text-slate-400 space-y-1.5 pt-0.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="truncate">
-                {localState.modelId.split('/').pop() || 'SmolLM2-360M-Instruct'}
-              </span>
-              <span className="font-mono tabular-nums shrink-0">
-                {localState.status === 'loading'
-                  ? `${localState.progressPercent}%`
-                  : localState.status === 'ready'
-                    ? 'Ready'
-                    : localState.status === 'generating'
-                      ? 'Active'
-                      : localState.status === 'error'
-                        ? 'Error'
-                        : localState.isCachedLikely
-                          ? 'Cached'
-                          : 'Standby'}
-              </span>
+        {localState.status === 'loading' && (
+          <div className="space-y-1">
+            <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-white/10 overflow-hidden">
+              <div
+                className="h-full bg-emerald-500 transition-all duration-200"
+                style={{ width: `${Math.max(4, localState.progressPercent)}%` }}
+              />
             </div>
-            {localState.status === 'loading' && (
-              <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-white/10 overflow-hidden">
-                <div
-                  className="h-full bg-emerald-500 transition-all duration-200"
-                  style={{ width: `${Math.max(4, localState.progressPercent)}%` }}
-                />
-              </div>
-            )}
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+              {localState.progressDetail}
+            </p>
+          </div>
+        )}
+
+        {(localState.status === 'idle' || localState.status === 'error') && (
+          <button
+            type="button"
+            onClick={onInitializeModel}
+            className="w-full min-h-[36px] px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.04] hover:border-emerald-500/40 text-xs font-medium text-slate-700 dark:text-slate-200 inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <Download className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            <span>{localState.isCachedLikely ? 'Load Cached Model' : 'Load Local Model'}</span>
+          </button>
+        )}
+
+        {localState.status === 'loading' && (
+          <div className="flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400">
+            <Loader2 className="w-3 h-3 animate-spin" />
+            <span>Preparing model in Web Worker...</span>
           </div>
         )}
       </div>
@@ -357,10 +347,8 @@ export function Sidebar({
 
   return (
     <>
-      {/* Desktop persistent sidebar */}
       <div className="hidden lg:block h-full shrink-0">{sidebarContent}</div>
 
-      {/* Mobile slide-over drawer */}
       {isOpen && (
         <div className="fixed inset-0 z-50 lg:hidden flex">
           <div

@@ -1,8 +1,4 @@
-export type AiMode = 'cloud' | 'local';
 export type ThemeMode = 'dark' | 'light';
-export type CloudProvider = 'gemini' | 'openai-compatible';
-export type CloudModelId = 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite';
-export type ThinkingDepth = 'LOW' | 'MEDIUM' | 'HIGH';
 export type LocalDevicePreference = 'auto' | 'webgpu' | 'wasm';
 export type LocalModelId =
   | 'HuggingFaceTB/SmolLM2-360M-Instruct'
@@ -28,8 +24,8 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   createdAt: number;
-  mode?: AiMode;
   model?: string;
+  backend?: 'webgpu' | 'wasm' | null;
   attachments?: Array<{
     id: string;
     kind: AttachmentItem['kind'];
@@ -47,47 +43,35 @@ export interface Conversation {
   title: string;
   createdAt: number;
   updatedAt: number;
-  mode: AiMode;
   attachments: AttachmentItem[];
   messages: ChatMessage[];
 }
 
 export interface AppSettings {
-  aiMode: AiMode;
   theme: ThemeMode;
-  cloudProvider: CloudProvider;
-  cloudModel: CloudModelId;
-  thinkingDepth: ThinkingDepth;
-  customEndpointUrl: string;
-  customModelName: string;
   systemPrompt: string;
   localModelId: LocalModelId;
   localDevicePreference: LocalDevicePreference;
   localMaxTokens: number;
+  temperature: number;
 }
 
 export type LocalEngineStatus = 'idle' | 'loading' | 'ready' | 'generating' | 'error';
 
-export interface LocalModelProgress {
-  status: string;
-  file?: string;
-  progress?: number;
-  loaded?: number;
-  total?: number;
-}
-
 export interface LocalEngineState {
   status: LocalEngineStatus;
   backend: 'webgpu' | 'wasm' | null;
-  modelId: string;
+  modelId: LocalModelId;
   progressPercent: number;
   progressFile: string;
   progressDetail: string;
   error: string | null;
   isCachedLikely: boolean;
+  isSupported: boolean;
 }
 
 export interface StorageSummary {
+  storageMode: 'indexeddb' | 'memory';
   conversationCount: number;
   messageCount: number;
   indexedDbEstimateBytes: number;
@@ -96,11 +80,11 @@ export interface StorageSummary {
   browserUsageBytes: number | null;
 }
 
-export interface CloudHealthInfo {
-  cloudAvailable: boolean;
-  models: Array<{
-    id: CloudModelId;
-    label: string;
-    description: string;
-  }>;
+export interface BrowserCapabilities {
+  webGpu: boolean;
+  webAssembly: boolean;
+  webWorker: boolean;
+  indexedDb: boolean;
+  cacheApi: boolean;
+  online: boolean;
 }

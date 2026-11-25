@@ -1,41 +1,37 @@
 import { useEffect, useState } from 'react';
 import {
   X,
-  Cloud,
   Cpu,
   Sun,
   Moon,
   Database,
   Trash2,
   Download,
-  CheckCircle2,
-  AlertTriangle,
   Loader2,
   RefreshCw,
 } from 'lucide-react';
 import type {
   AppSettings,
-  CloudHealthInfo,
-  CloudModelId,
+  BrowserCapabilities,
   Conversation,
   LocalDevicePreference,
   LocalEngineState,
   LocalModelId,
   StorageSummary,
-  ThinkingDepth,
 } from '../types';
 import {
+  clearModelCache,
   formatBytes,
   getStorageSummary,
-} from '../services/storage';
+} from '../lib/database';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   settings: AppSettings;
   onUpdateSettings: (patch: Partial<AppSettings>) => void;
-  cloudHealth: CloudHealthInfo | null;
   localState: LocalEngineState;
+  capabilities: BrowserCapabilities | null;
   onLoadLocalModel: () => void;
   onUnloadLocalModel: () => void;
   conversations: Conversation[];
@@ -48,8 +44,8 @@ export function SettingsModal({
   onClose,
   settings,
   onUpdateSettings,
-  cloudHealth,
   localState,
+  capabilities,
   onLoadLocalModel,
   onUnloadLocalModel,
   conversations,
@@ -57,7 +53,7 @@ export function SettingsModal({
   onClearAllData,
 }: SettingsModalProps) {
   const [storageSummary, setStorageSummary] = useState<StorageSummary | null>(null);
-  const [confirmClearType, setConfirmClearType] = useState<'conversations' | 'all' | null>(null);
+  const [confirmClearType, setConfirmClearType] = useState<'conversations' | 'cache' | 'all' | null>(null);
   const [isClearing, setIsClearing] = useState(false);
 
   useEffect(() => {
@@ -95,6 +91,9 @@ export function SettingsModal({
     try {
       if (confirmClearType === 'conversations') {
         await onClearConversations();
+      } else if (confirmClearType === 'cache') {
+        onUnloadLocalModel();
+        await clearModelCache();
       } else {
         await onClearAllData();
       }
@@ -139,188 +138,23 @@ export function SettingsModal({
 
         {/* Scrollable Content */}
         <div className="flex-1 overflow-y-auto p-5 space-y-7">
-          {/* 1. AI Mode */}
+          {/* 1. Browser AI Engine */}
           <section className="space-y-3">
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
-              Operating Mode
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => onUpdateSettings({ aiMode: 'cloud' })}
-                className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
-                  settings.aiMode === 'cloud'
-                    ? 'border-emerald-500 bg-emerald-500/10'
-                    : 'border-slate-200 dark:border-white/10 hover:border-slate-300 dark:hover:border-white/20'
-                }`}
-              >
-                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
-                  <Cloud className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                  <span>Cloud AI</span>
-                </div>
-                <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-                  Real-time streaming reasoning via secure server-side integration.
-                </p>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onUpdateSettings({ aiMode: 'local' })}
-                className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
-                  settings.aiMode === 'local'
-                    ? 'border-emerald-500 bg-emerald-500/10'
-                    : 'border-slate-200 dark:border-white/10 hover:border-slate-300 dark:hover:border-white/20'
-                }`}
-              >
-                <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
-                  <Cpu className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                  <span>Local AI</span>
-                </div>
-                <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
-                  Private SmolLM2-360M-Instruct inference inside your browser via WebGPU/WASM.
-                </p>
-              </button>
-            </div>
-          </section>
-
-          {/* 2. Cloud AI Configuration */}
-          <section className="space-y-3 pt-5 border-t border-slate-200 dark:border-white/10">
             <div className="flex items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
-                Cloud AI Configuration
-              </h3>
-              <span className="inline-flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400">
-                {cloudHealth?.cloudAvailable ? (
-                  <>
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                    <span>Built-in cloud service active</span>
-                  </>
-                ) : (
-                  <>
-                    <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
-                    <span>Use Local AI or a custom endpoint</span>
-                  </>
-                )}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <label className="block space-y-1.5">
-                <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
-                  Provider
-                </span>
-                <select
-                  value={settings.cloudProvider}
-                  onChange={(e) =>
-                    onUpdateSettings({
-                      cloudProvider: e.target.value as AppSettings['cloudProvider'],
-                    })
-                  }
-                  className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/15 bg-slate-50 dark:bg-[#070B14] text-sm text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500"
-                >
-                  <option value="gemini">Google Gemini (Server Proxy)</option>
-                  <option value="openai-compatible">Custom Local / OpenAI-Compatible</option>
-                </select>
-              </label>
-
-              {settings.cloudProvider === 'gemini' ? (
-                <label className="block space-y-1.5">
-                  <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
-                    Model
-                  </span>
-                  <select
-                    value={settings.cloudModel}
-                    onChange={(e) =>
-                      onUpdateSettings({ cloudModel: e.target.value as CloudModelId })
-                    }
-                    className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/15 bg-slate-50 dark:bg-[#070B14] text-sm text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500"
-                  >
-                    <option value="gemini-4-hydrogen">Gemini 4 Hydrogen (Balanced)</option>
-                    <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite (Fast)</option>
-                  </select>
-                </label>
-              ) : (
-                <label className="block space-y-1.5">
-                  <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
-                    Custom Model Name
-                  </span>
-                  <input
-                    type="text"
-                    value={settings.customModelName}
-                    onChange={(e) => onUpdateSettings({ customModelName: e.target.value })}
-                    placeholder="llama3.2"
-                    className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/15 bg-slate-50 dark:bg-[#070B14] text-sm text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500"
-                  />
-                </label>
-              )}
-            </div>
-
-            {settings.cloudProvider === 'gemini' && settings.cloudModel === 'gemini-4-hydrogen' && (
-              <div className="space-y-1.5">
-                <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
-                  Reasoning Depth
-                </span>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['LOW', 'MEDIUM', 'HIGH'] as ThinkingDepth[]).map((depth) => (
-                    <button
-                      key={depth}
-                      type="button"
-                      onClick={() => onUpdateSettings({ thinkingDepth: depth })}
-                      className={`min-h-[38px] px-3 py-1.5 rounded-xl border text-xs font-medium transition-colors cursor-pointer ${
-                        settings.thinkingDepth === depth
-                          ? 'border-emerald-500 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-                          : 'border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-400'
-                      }`}
-                    >
-                      {depth === 'LOW' ? 'Low (Fastest)' : depth === 'MEDIUM' ? 'Medium' : 'High (Deep)'}
-                    </button>
-                  ))}
-                </div>
+              <div className="flex items-center gap-2">
+                <Cpu className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+                  Browser AI Engine (Transformers.js)
+                </h3>
               </div>
-            )}
-
-            {settings.cloudProvider === 'openai-compatible' && (
-              <label className="block space-y-1.5">
-                <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
-                  Endpoint URL (e.g. local Ollama server)
-                </span>
-                <input
-                  type="url"
-                  value={settings.customEndpointUrl}
-                  onChange={(e) => onUpdateSettings({ customEndpointUrl: e.target.value })}
-                  placeholder="http://localhost:11434/v1/chat/completions"
-                  className="w-full min-h-[42px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/15 bg-slate-50 dark:bg-[#070B14] text-sm font-mono text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500"
-                />
-              </label>
-            )}
-
-            <label className="block space-y-1.5">
-              <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
-                System Prompt
-              </span>
-              <textarea
-                rows={2}
-                value={settings.systemPrompt}
-                onChange={(e) => onUpdateSettings({ systemPrompt: e.target.value })}
-                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/15 bg-slate-50 dark:bg-[#070B14] text-xs sm:text-sm text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500"
-              />
-            </label>
-          </section>
-
-          {/* 3. Local AI Engine */}
-          <section className="space-y-3 pt-5 border-t border-slate-200 dark:border-white/10">
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
-                Local AI Engine (Browser Worker)
-              </h3>
               <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
-                {localState.modelId}
+                Zero API keys
               </span>
             </div>
 
-            <div className="p-3.5 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50/80 dark:bg-[#070B14] space-y-3">
+            <div className="p-3.5 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50/80 dark:bg-[#070B14] space-y-3.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="space-y-0.5">
+                <div className="space-y-0.5 min-w-0">
                   <p className="text-xs font-medium text-slate-900 dark:text-white">
                     Status:{' '}
                     <span className="text-emerald-600 dark:text-emerald-400 capitalize">
@@ -328,12 +162,12 @@ export function SettingsModal({
                     </span>
                     {localState.backend ? ` (${localState.backend.toUpperCase()})` : ''}
                   </p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                  <p className="text-xs text-slate-500 dark:text-slate-400 break-words">
                     {localState.progressDetail}
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 shrink-0">
                   {localState.status === 'ready' || localState.status === 'generating' ? (
                     <button
                       type="button"
@@ -374,7 +208,7 @@ export function SettingsModal({
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                 <label className="block space-y-1">
                   <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
                     Local Model
@@ -389,17 +223,17 @@ export function SettingsModal({
                     className="w-full min-h-[38px] px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/15 bg-white dark:bg-[#0D1424] text-xs text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500"
                   >
                     <option value="HuggingFaceTB/SmolLM2-360M-Instruct">
-                      SmolLM2-360M-Instruct (Balanced)
+                      SmolLM2-360M-Instruct (Balanced · ~260 MB)
                     </option>
                     <option value="HuggingFaceTB/SmolLM2-135M-Instruct">
-                      SmolLM2-135M-Instruct (Ultra-Fast)
+                      SmolLM2-135M-Instruct (Ultra-Fast · ~110 MB)
                     </option>
                   </select>
                 </label>
 
                 <label className="block space-y-1">
                   <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
-                    Execution Backend
+                    Compute Backend
                   </span>
                   <select
                     value={settings.localDevicePreference}
@@ -415,7 +249,9 @@ export function SettingsModal({
                     <option value="wasm">Force WebAssembly (WASM)</option>
                   </select>
                 </label>
+              </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <label className="block space-y-1">
                   <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
                     Max Response Tokens ({settings.localMaxTokens})
@@ -429,14 +265,55 @@ export function SettingsModal({
                     onChange={(e) =>
                       onUpdateSettings({ localMaxTokens: Number(e.target.value) })
                     }
-                    className="w-full accent-emerald-600 mt-2"
+                    className="w-full accent-emerald-600 mt-1.5"
+                  />
+                </label>
+
+                <label className="block space-y-1">
+                  <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                    Sampling Temperature ({settings.temperature.toFixed(1)})
+                  </span>
+                  <input
+                    type="range"
+                    min={0.1}
+                    max={1.0}
+                    step={0.1}
+                    value={settings.temperature}
+                    onChange={(e) =>
+                      onUpdateSettings({ temperature: Number(e.target.value) })
+                    }
+                    className="w-full accent-emerald-600 mt-1.5"
                   />
                 </label>
               </div>
+
+              {capabilities && (
+                <div className="pt-2 border-t border-slate-200 dark:border-white/10 text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span>WebGPU: {capabilities.webGpu ? 'Supported' : 'Unavailable (WASM fallback)'}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>WebAssembly: {capabilities.webAssembly ? 'Ready' : 'Missing'}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>Cache API: {capabilities.cacheApi ? 'Ready' : 'Unavailable'}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>Network: {capabilities.online ? 'Online' : 'Offline'}</span>
+                </div>
+              )}
             </div>
+
+            <label className="block space-y-1.5">
+              <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                System Prompt
+              </span>
+              <textarea
+                rows={2}
+                value={settings.systemPrompt}
+                onChange={(e) => onUpdateSettings({ systemPrompt: e.target.value })}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-white/15 bg-slate-50 dark:bg-[#070B14] text-xs sm:text-sm text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500"
+              />
+            </label>
           </section>
 
-          {/* 4. Appearance */}
+          {/* 2. Appearance */}
           <section className="space-y-3 pt-5 border-t border-slate-200 dark:border-white/10">
             <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
               Appearance
@@ -469,13 +346,20 @@ export function SettingsModal({
             </div>
           </section>
 
-          {/* 5. Data & Storage */}
+          {/* 3. Local Storage */}
           <section className="space-y-3 pt-5 border-t border-slate-200 dark:border-white/10">
-            <div className="flex items-center gap-2">
-              <Database className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
-                Local Data &amp; Storage (IndexedDB)
-              </h3>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Database className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+                  Local Data &amp; Browser Storage
+                </h3>
+              </div>
+              {storageSummary && (
+                <span className="text-xs font-mono text-slate-500 dark:text-slate-400">
+                  {storageSummary.storageMode === 'indexeddb' ? 'IndexedDB' : 'Memory Fallback'}
+                </span>
+              )}
             </div>
 
             {storageSummary && (
@@ -534,11 +418,20 @@ export function SettingsModal({
 
               <button
                 type="button"
+                onClick={() => setConfirmClearType('cache')}
+                className="min-h-[42px] px-3.5 py-2 rounded-xl border border-rose-500/30 text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 inline-flex items-center gap-2 cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Clear Model Cache</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setConfirmClearType('all')}
                 className="min-h-[42px] px-3.5 py-2 rounded-xl border border-rose-500/30 text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 inline-flex items-center gap-2 cursor-pointer"
               >
                 <Trash2 className="w-4 h-4" />
-                <span>Reset All Local Data</span>
+                <span>Reset All Data</span>
               </button>
             </div>
 
@@ -546,8 +439,10 @@ export function SettingsModal({
               <div className="p-3.5 rounded-xl border border-rose-500/40 bg-rose-500/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <p className="text-xs text-rose-700 dark:text-rose-200">
                   {confirmClearType === 'conversations'
-                    ? 'Permanently delete all saved conversations from IndexedDB?'
-                    : 'Permanently delete all chats, settings, and cached local AI model weights?'}
+                    ? 'Permanently delete all saved conversations?'
+                    : confirmClearType === 'cache'
+                      ? 'Remove cached Transformers.js model weights from browser storage?'
+                      : 'Permanently delete all chats, settings, and cached local model weights?'}
                 </p>
                 <div className="flex items-center gap-2 shrink-0">
                   <button

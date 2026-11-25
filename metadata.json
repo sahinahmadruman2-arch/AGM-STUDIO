@@ -1,6 +1,6 @@
 {
   "name": "AGM Studio",
-  "description": "Hybrid Cloud and Local Browser AI workspace featuring real-time Gemini streaming, in-browser SmolLM2 inference via WebGPU/WASM, and integrated PDF, HTML, TXT, and website reading.",
+  "description": "Pure browser-based AI workspace running SmolLM2-360M-Instruct locally via WebGPU/WASM, with IndexedDB persistence, PDF/TXT/HTML parsing, and CORS-aware website reading.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }
