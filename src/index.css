@@ -11,6 +11,12 @@
   html {
     font-family: var(--font-sans);
     scroll-behavior: smooth;
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    overscroll-behavior: none;
   }
 
   h1, h2, h3, h4, .font-display {

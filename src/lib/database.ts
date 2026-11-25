@@ -25,6 +25,17 @@ export function getStorageMode(): 'indexeddb' | 'memory' {
   return storageMode;
 }
 
+export async function requestPersistentStorage(): Promise<boolean> {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.storage?.persist) {
+      return await navigator.storage.persist();
+    }
+  } catch {
+    // Ignore storage persistence errors on unsupported WebViews
+  }
+  return false;
+}
+
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     if (typeof indexedDB === 'undefined') {

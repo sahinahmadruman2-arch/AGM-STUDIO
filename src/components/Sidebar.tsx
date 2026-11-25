@@ -96,7 +96,7 @@ export function Sidebar({
               : 'Standby';
 
   const sidebarContent = (
-    <aside className="w-[280px] h-full flex flex-col border-r border-slate-200 dark:border-white/10 bg-white/95 dark:bg-[#080D1A]/95 backdrop-blur-xl select-none">
+    <aside className="w-[280px] h-full pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] flex flex-col border-r border-slate-200 dark:border-white/10 bg-white/95 dark:bg-[#080D1A]/95 backdrop-blur-xl select-none">
       {/* Top Brand + New Chat */}
       <div className="p-4 border-b border-slate-200 dark:border-white/10 space-y-3">
         <div className="flex items-center justify-between">

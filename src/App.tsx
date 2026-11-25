@@ -25,9 +25,16 @@ import {
   getStorageMode,
   listConversations,
   loadSettings,
+  requestPersistentStorage,
   saveConversation,
   saveSettings,
 } from './lib/database';
+import {
+  hideNativeSplash,
+  initNativeBridge,
+  registerAndroidBackHandler,
+  syncNativeSystemBars,
+} from './lib/capacitor-bridge';
 import { detectBrowserCapabilities, localAiManager } from './lib/local-ai';
 import { deriveConversationTitle, generateAssistantReply } from './lib/chat-engine';
 import { processUploadedDocument } from './lib/document-reader';
@@ -72,9 +79,11 @@ export default function App() {
 
   useEffect(() => {
     let mounted = true;
+    void initNativeBridge();
 
     (async () => {
       try {
+        void requestPersistentStorage();
         const [loadedSettings, loadedConvs, caps] = await Promise.all([
           loadSettings(),
           listConversations(),
@@ -89,7 +98,7 @@ export default function App() {
         }
         if (getStorageMode() === 'memory') {
           setStorageWarning(
-            'IndexedDB is restricted in this browser session. Chats will stay available until this tab closes.'
+            'IndexedDB is restricted in this session. Chats will stay available until the app closes.'
           );
         }
         void localAiManager.checkModelCached(loadedSettings.localModelId);
@@ -100,7 +109,10 @@ export default function App() {
           );
         }
       } finally {
-        if (mounted) setIsHydrated(true);
+        if (mounted) {
+          setIsHydrated(true);
+          void hideNativeSplash();
+        }
       }
     })();
 
@@ -128,7 +140,47 @@ export default function App() {
     } else {
       root.classList.remove('dark');
     }
+    void syncNativeSystemBars(settings.theme);
   }, [settings.theme]);
+
+  const backStateRef = useRef({
+    previewAttachment,
+    isWebsiteReaderOpen,
+    isSettingsOpen,
+    isSidebarOpen,
+  });
+
+  useEffect(() => {
+    backStateRef.current = {
+      previewAttachment,
+      isWebsiteReaderOpen,
+      isSettingsOpen,
+      isSidebarOpen,
+    };
+  }, [previewAttachment, isWebsiteReaderOpen, isSettingsOpen, isSidebarOpen]);
+
+  useEffect(() => {
+    return registerAndroidBackHandler(() => {
+      const state = backStateRef.current;
+      if (state.previewAttachment) {
+        setPreviewAttachment(null);
+        return true;
+      }
+      if (state.isWebsiteReaderOpen) {
+        setIsWebsiteReaderOpen(false);
+        return true;
+      }
+      if (state.isSettingsOpen) {
+        setIsSettingsOpen(false);
+        return true;
+      }
+      if (state.isSidebarOpen) {
+        setIsSidebarOpen(false);
+        return true;
+      }
+      return false;
+    });
+  }, []);
 
   const activeConversation = useMemo(
     () => conversations.find((c) => c.id === activeConversationId) ?? null,
@@ -563,7 +615,7 @@ export default function App() {
       {/* Main Content Area */}
       <div className="flex-1 min-w-0 flex flex-col h-full relative">
         {/* Top Bar */}
-        <header className="h-14 px-3 sm:px-6 border-b border-slate-200 dark:border-white/10 bg-white/75 dark:bg-[#080D1A]/75 backdrop-blur-xl flex items-center justify-between gap-3 shrink-0 z-20">
+        <header className="min-h-14 pt-[env(safe-area-inset-top)] px-3 sm:px-6 border-b border-slate-200 dark:border-white/10 bg-white/75 dark:bg-[#080D1A]/75 backdrop-blur-xl flex items-center justify-between gap-3 shrink-0 z-20">
           <div className="flex items-center gap-2.5 min-w-0">
             <button
               type="button"

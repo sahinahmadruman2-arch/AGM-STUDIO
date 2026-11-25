@@ -9,9 +9,25 @@ import {
 
 const DEFAULT_MODEL_ID = 'HuggingFaceTB/SmolLM2-360M-Instruct';
 
-// Configure Transformers.js for pure browser execution & Cache API storage
+// Configure Transformers.js for pure browser & Android WebView execution + Cache API storage
 env.allowLocalModels = false;
 env.useBrowserCache = true;
+
+try {
+  const wasmEnv = env.backends?.onnx?.wasm as
+    | { numThreads?: number; proxy?: boolean }
+    | undefined;
+  if (wasmEnv) {
+    // Android WebView without COOP/COEP headers lacks SharedArrayBuffer (crossOriginIsolated = false)
+    wasmEnv.numThreads = self.crossOriginIsolated
+      ? Math.min(4, self.navigator?.hardwareConcurrency || 2)
+      : 1;
+    // Already running inside a dedicated Web Worker; avoid spawning nested proxy workers
+    wasmEnv.proxy = false;
+  }
+} catch {
+  // Ignore if backend config structure differs
+}
 
 type WorkerInboundMessage =
   | { type: 'load'; modelId?: string; devicePreference: 'auto' | 'webgpu' | 'wasm' }
