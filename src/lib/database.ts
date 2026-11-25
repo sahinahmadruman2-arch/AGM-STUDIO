@@ -9,7 +9,7 @@ const SETTINGS_KEY = 'app-settings';
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
   systemPrompt:
-    'You are AGM Studio, a helpful AI assistant running locally in the user browser. Keep answers clear, concise, and grounded in any attached context. If a request exceeds what a compact local model can reliably verify, state that honestly.',
+    'You are AGM Studio, a helpful AI assistant running locally in the user browser. Keep answers clear, concise, and grounded in any attached context.',
   localModelId: 'HuggingFaceTB/SmolLM2-360M-Instruct',
   localDevicePreference: 'auto',
   localMaxTokens: 512,
@@ -107,6 +107,18 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
   }
 }
 
+function isValidConversation(item: unknown): item is Conversation {
+  if (!item || typeof item !== 'object') return false;
+  const c = item as Partial<Conversation>;
+  return (
+    typeof c.id === 'string' &&
+    c.id.length > 0 &&
+    typeof c.title === 'string' &&
+    Array.isArray(c.messages) &&
+    Array.isArray(c.attachments)
+  );
+}
+
 export async function listConversations(): Promise<Conversation[]> {
   try {
     const db = await openDatabase();
@@ -115,8 +127,20 @@ export async function listConversations(): Promise<Conversation[]> {
       const store = tx.objectStore(STORE_CONVERSATIONS);
       const req = store.getAll();
       req.onsuccess = () => {
-        const items = (req.result as Conversation[]) ?? [];
+        const rawItems = Array.isArray(req.result) ? req.result : [];
+        const seenIds = new Set<string>();
+        const items: Conversation[] = [];
+        for (const raw of rawItems) {
+          if (!isValidConversation(raw) || seenIds.has(raw.id)) continue;
+          seenIds.add(raw.id);
+          items.push({
+            ...raw,
+            createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
+            updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : Date.now(),
+          });
+        }
         items.sort((a, b) => b.updatedAt - a.updatedAt);
+        memoryConversations.clear();
         items.forEach((c) => memoryConversations.set(c.id, c));
         resolve(items);
       };

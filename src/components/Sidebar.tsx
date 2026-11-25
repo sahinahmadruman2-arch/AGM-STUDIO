@@ -13,6 +13,8 @@ import {
   Search,
   Download,
   Loader2,
+  Info,
+  RotateCcw,
 } from 'lucide-react';
 import type { Conversation, LocalEngineState, ThemeMode } from '../types';
 import { Logo } from './Logo';
@@ -31,7 +33,7 @@ interface SidebarProps {
   onDeleteConversation: (id: string) => void;
   onInitializeModel: () => void;
   onToggleTheme: () => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (tab?: 'engine' | 'app' | 'storage' | 'about') => void;
 }
 
 export function Sidebar({
@@ -96,20 +98,25 @@ export function Sidebar({
               : 'Standby';
 
   const sidebarContent = (
-    <aside className="w-[280px] h-full pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] flex flex-col border-r border-slate-200 dark:border-white/10 bg-white/95 dark:bg-[#080D1A]/95 backdrop-blur-xl select-none">
+    <aside className="w-[286px] h-full pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] flex flex-col border-r border-slate-200 dark:border-white/10 bg-white/95 dark:bg-[#080D1A]/95 backdrop-blur-xl select-none">
       {/* Top Brand + New Chat */}
       <div className="p-4 border-b border-slate-200 dark:border-white/10 space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5 min-w-0">
             <Logo size={30} className="shrink-0" />
-            <span className="font-display text-base font-semibold tracking-tight text-slate-900 dark:text-white whitespace-nowrap">
-              AGM Studio
-            </span>
+            <div className="min-w-0">
+              <span className="block font-display text-base font-semibold tracking-tight text-slate-900 dark:text-white whitespace-nowrap truncate">
+                AGM Studio
+              </span>
+              <span className="block text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                Pure Browser AI
+              </span>
+            </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="lg:hidden min-h-[40px] min-w-[40px] flex items-center justify-center rounded-lg text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer"
+            className="agm-press lg:hidden min-h-[44px] min-w-[44px] -mr-1.5 flex items-center justify-center rounded-xl text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/5 cursor-pointer"
             aria-label="Close sidebar"
           >
             <X className="w-5 h-5" />
@@ -122,7 +129,7 @@ export function Sidebar({
             onNewChat();
             onClose();
           }}
-          className="w-full min-h-[44px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium inline-flex items-center justify-center gap-2 transition-colors shadow-sm shadow-emerald-950/20 whitespace-nowrap cursor-pointer"
+          className="agm-press w-full min-h-[44px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium inline-flex items-center justify-center gap-2 shadow-sm shadow-emerald-950/20 whitespace-nowrap cursor-pointer"
         >
           <Plus className="w-4 h-4 shrink-0" />
           <span>New Chat</span>
@@ -134,7 +141,7 @@ export function Sidebar({
         <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
           <span className="inline-flex items-center gap-1.5 font-medium text-slate-700 dark:text-slate-200">
             <Cpu className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-            <span>Browser AI Engine</span>
+            <span>Local AI Engine</span>
           </span>
           <span className="font-mono text-[11px] tabular-nums text-emerald-600 dark:text-emerald-400">
             {statusLabel}
@@ -164,10 +171,19 @@ export function Sidebar({
           <button
             type="button"
             onClick={onInitializeModel}
-            className="w-full min-h-[36px] px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.04] hover:border-emerald-500/40 text-xs font-medium text-slate-700 dark:text-slate-200 inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+            className="agm-press w-full min-h-[40px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.04] hover:border-emerald-500/40 text-xs font-medium text-slate-700 dark:text-slate-200 inline-flex items-center justify-center gap-1.5 cursor-pointer"
           >
-            <Download className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-            <span>{localState.isCachedLikely ? 'Load Cached Model' : 'Load Local Model'}</span>
+            {localState.status === 'error' ? (
+              <>
+                <RotateCcw className="w-3.5 h-3.5 text-rose-500" />
+                <span>Retry Load Model</span>
+              </>
+            ) : (
+              <>
+                <Download className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                <span>{localState.isCachedLikely ? 'Load Cached Model' : 'Load Local Model'}</span>
+              </>
+            )}
           </button>
         )}
 
@@ -189,7 +205,7 @@ export function Sidebar({
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search conversations..."
             aria-label="Search conversations"
-            className="w-full min-h-[38px] pl-8 pr-3 py-1.5 rounded-lg text-xs bg-slate-100/80 dark:bg-white/[0.04] border border-slate-200 dark:border-white/10 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-emerald-500/60"
+            className="w-full min-h-[40px] pl-8 pr-3 py-1.5 rounded-xl text-xs bg-slate-100/80 dark:bg-white/[0.04] border border-slate-200 dark:border-white/10 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-emerald-500/60"
           />
         </div>
       </div>
@@ -227,12 +243,12 @@ export function Sidebar({
                         if (e.key === 'Escape') cancelEdit();
                       }}
                       autoFocus
-                      className="flex-1 min-w-0 px-2 py-1 text-xs rounded-md bg-white dark:bg-[#0D1424] border border-emerald-500/50 text-slate-900 dark:text-white focus:outline-none"
+                      className="flex-1 min-w-0 px-2 py-1.5 text-xs rounded-lg bg-white dark:bg-[#0D1424] border border-emerald-500/50 text-slate-900 dark:text-white focus:outline-none"
                     />
                     <button
                       type="button"
                       onClick={commitEdit}
-                      className="min-h-[32px] min-w-[32px] flex items-center justify-center rounded-md text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 cursor-pointer"
+                      className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 cursor-pointer"
                       aria-label="Save title"
                     >
                       <Check className="w-3.5 h-3.5" />
@@ -240,7 +256,7 @@ export function Sidebar({
                     <button
                       type="button"
                       onClick={cancelEdit}
-                      className="min-h-[32px] min-w-[32px] flex items-center justify-center rounded-md text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+                      className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
                       aria-label="Cancel rename"
                     >
                       <X className="w-3.5 h-3.5" />
@@ -283,11 +299,11 @@ export function Sidebar({
                       </div>
                     </button>
 
-                    <div className="flex items-center pr-1.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                    <div className="flex items-center pr-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                       <button
                         type="button"
                         onClick={() => startEditing(conv)}
-                        className="min-h-[36px] min-w-[32px] flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-200/70 dark:hover:bg-white/10 cursor-pointer"
+                        className="min-h-[38px] min-w-[36px] flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-200/70 dark:hover:bg-white/10 cursor-pointer"
                         aria-label={`Rename ${conv.title}`}
                       >
                         <Pencil className="w-3.5 h-3.5" />
@@ -295,7 +311,7 @@ export function Sidebar({
                       <button
                         type="button"
                         onClick={() => onDeleteConversation(conv.id)}
-                        className="min-h-[36px] min-w-[32px] flex items-center justify-center rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 cursor-pointer"
+                        className="min-h-[38px] min-w-[36px] flex items-center justify-center rounded-lg text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 cursor-pointer"
                         aria-label={`Delete ${conv.title}`}
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -309,37 +325,51 @@ export function Sidebar({
         )}
       </div>
 
-      {/* Bottom Theme & Settings Controls */}
-      <div className="p-3 border-t border-slate-200 dark:border-white/10 grid grid-cols-2 gap-2">
-        <button
-          type="button"
-          onClick={onToggleTheme}
-          className="min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.03] hover:bg-slate-100 dark:hover:bg-white/[0.06] text-xs font-medium text-slate-700 dark:text-slate-200 inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap cursor-pointer"
-          aria-label="Toggle color theme"
-        >
-          {theme === 'dark' ? (
-            <>
-              <Sun className="w-4 h-4 text-amber-400 shrink-0" />
-              <span>Light</span>
-            </>
-          ) : (
-            <>
-              <Moon className="w-4 h-4 text-slate-700 shrink-0" />
-              <span>Dark</span>
-            </>
-          )}
-        </button>
+      {/* Bottom Controls: Theme, Settings, About AGM Studio */}
+      <div className="p-3 border-t border-slate-200 dark:border-white/10 space-y-2">
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={onToggleTheme}
+            className="agm-press min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.03] hover:bg-slate-100 dark:hover:bg-white/[0.06] text-xs font-medium text-slate-700 dark:text-slate-200 inline-flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer"
+            aria-label="Toggle color theme"
+          >
+            {theme === 'dark' ? (
+              <>
+                <Sun className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>Light</span>
+              </>
+            ) : (
+              <>
+                <Moon className="w-4 h-4 text-slate-700 shrink-0" />
+                <span>Dark</span>
+              </>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              onOpenSettings('engine');
+              onClose();
+            }}
+            className="agm-press min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.03] hover:bg-slate-100 dark:hover:bg-white/[0.06] text-xs font-medium text-slate-700 dark:text-slate-200 inline-flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer"
+          >
+            <Settings className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+            <span>Settings</span>
+          </button>
+        </div>
 
         <button
           type="button"
           onClick={() => {
-            onOpenSettings();
+            onOpenSettings('about');
             onClose();
           }}
-          className="min-h-[44px] px-3 py-2 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-white/[0.03] hover:bg-slate-100 dark:hover:bg-white/[0.06] text-xs font-medium text-slate-700 dark:text-slate-200 inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap cursor-pointer"
+          className="agm-press w-full min-h-[40px] px-3 py-1.5 rounded-xl text-xs font-medium text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.04] inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
         >
-          <Settings className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-          <span>Settings</span>
+          <Info className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+          <span>About AGM Studio</span>
         </button>
       </div>
     </aside>
@@ -352,11 +382,11 @@ export function Sidebar({
       {isOpen && (
         <div className="fixed inset-0 z-50 lg:hidden flex">
           <div
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm agm-backdrop-in"
             onClick={onClose}
             aria-hidden="true"
           />
-          <div className="relative z-10 h-full max-w-[85vw]">{sidebarContent}</div>
+          <div className="relative z-10 h-full max-w-[85vw] agm-drawer-in">{sidebarContent}</div>
         </div>
       )}
     </>

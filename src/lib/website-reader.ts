@@ -1,5 +1,6 @@
 import type { AttachmentItem } from '../types';
 import { extractReadableHtmlText } from './document-reader';
+import { createId } from './id';
 
 export interface WebsiteFetchResult {
   url: string;
@@ -139,7 +140,7 @@ export function extractPastedWebsiteContent(
 
 export function websiteResultToAttachment(result: WebsiteFetchResult): AttachmentItem {
   return {
-    id: crypto.randomUUID(),
+    id: createId(),
     kind: 'website',
     name: result.title || result.url,
     url: result.url,

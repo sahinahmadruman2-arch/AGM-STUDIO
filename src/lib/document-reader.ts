@@ -1,6 +1,7 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { AttachmentItem } from '../types';
+import { createId } from './id';
 
 try {
   pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -204,7 +205,7 @@ export async function processUploadedDocument(file: File): Promise<AttachmentIte
     try {
       const pdfData = await extractPdfText(file);
       return {
-        id: crypto.randomUUID(),
+        id: createId(),
         kind: 'pdf',
         name: file.name,
         content: pdfData.content,
@@ -233,7 +234,7 @@ export async function processUploadedDocument(file: File): Promise<AttachmentIte
   if (kind === 'html') {
     const htmlData = extractReadableHtmlText(rawText, file.name);
     return {
-      id: crypto.randomUUID(),
+      id: createId(),
       kind: 'html',
       name: file.name,
       content: htmlData.content,
@@ -247,7 +248,7 @@ export async function processUploadedDocument(file: File): Promise<AttachmentIte
 
   const normalizedTxt = rawText.replace(/\r\n/g, '\n').trim().slice(0, MAX_EXTRACTED_CHARS);
   return {
-    id: crypto.randomUUID(),
+    id: createId(),
     kind: 'txt',
     name: file.name,
     content: normalizedTxt,

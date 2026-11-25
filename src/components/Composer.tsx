@@ -1,4 +1,10 @@
-import { useEffect, useRef, type ChangeEvent, type KeyboardEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  type ChangeEvent,
+  type KeyboardEvent,
+  type RefObject,
+} from 'react';
 import {
   Paperclip,
   Globe,
@@ -26,6 +32,7 @@ interface ComposerProps {
   onOpenWebsiteReader: () => void;
   localState: LocalEngineState;
   onOpenSettings: () => void;
+  fileInputRef: RefObject<HTMLInputElement | null>;
 }
 
 export function Composer({
@@ -42,15 +49,15 @@ export function Composer({
   onOpenWebsiteReader,
   localState,
   onOpenSettings,
+  fileInputRef,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [input]);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -69,12 +76,19 @@ export function Composer({
     }
   };
 
+  const handleFocus = () => {
+    // Keep composer comfortably visible above Android soft keyboard
+    setTimeout(() => {
+      textareaRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }, 180);
+  };
+
   const canSend = !isGenerating && input.trim().length > 0;
   const modelShortName = localState.modelId.split('/').pop() || 'SmolLM2-360M-Instruct';
 
   return (
-    <div className="border-t border-slate-200 dark:border-white/10 bg-white/80 dark:bg-[#080D1A]/85 backdrop-blur-xl px-3 sm:px-6 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-      <div className="max-w-3xl mx-auto space-y-2.5">
+    <div className="border-t border-slate-200 dark:border-white/10 bg-white/85 dark:bg-[#080D1A]/90 backdrop-blur-xl px-3 sm:px-6 pt-2.5 pb-[max(0.75rem,env(safe-area-inset-bottom))] shrink-0">
+      <div className="max-w-3xl mx-auto space-y-2">
         {/* Attached Documents & Websites Strip */}
         {attachments.length > 0 && (
           <div className="flex items-center gap-2 overflow-x-auto pb-1">
@@ -105,7 +119,7 @@ export function Composer({
                 <button
                   type="button"
                   onClick={() => onRemoveAttachment(att.id)}
-                  className="min-h-[28px] min-w-[28px] flex items-center justify-center rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                  className="agm-press min-h-[28px] min-w-[28px] flex items-center justify-center rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 cursor-pointer"
                   aria-label={`Remove ${att.name}`}
                 >
                   <X className="w-3.5 h-3.5" />
@@ -116,23 +130,24 @@ export function Composer({
         )}
 
         {/* Main Composer Box */}
-        <div className="rounded-2xl border border-slate-200 dark:border-white/15 bg-white dark:bg-[#0D1424] focus-within:border-emerald-500/60 dark:focus-within:border-emerald-400/50 focus-within:ring-2 focus-within:ring-emerald-500/15 transition-all shadow-sm">
+        <div className="rounded-2xl border border-slate-200 dark:border-white/15 bg-white dark:bg-[#0D1424] focus-within:border-emerald-500/60 dark:focus-within:border-emerald-400/50 focus-within:ring-2 focus-within:ring-emerald-500/15 transition-colors shadow-sm">
           <textarea
             ref={textareaRef}
             rows={1}
             value={input}
             onChange={(e) => onChangeInput(e.target.value)}
             onKeyDown={handleKeyDown}
+            onFocus={handleFocus}
             placeholder={
               attachments.length > 0
-                ? 'Ask a question about your attached documents or website...'
-                : `Message ${modelShortName} (runs locally in your browser)...`
+                ? 'Ask AGM Studio about your attached documents or website...'
+                : 'Message AGM Studio...'
             }
-            aria-label="Message input"
-            className="w-full resize-none bg-transparent px-4 pt-3.5 pb-2 text-[15px] text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none max-h-[180px]"
+            aria-label="Message AGM Studio"
+            className="w-full resize-none bg-transparent px-4 pt-3 pb-1.5 text-[15px] leading-relaxed text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:outline-none max-h-[160px]"
           />
 
-          <div className="flex items-center justify-between gap-2 px-2.5 pb-2.5 pt-1">
+          <div className="flex items-center justify-between gap-2 px-2 pb-2 pt-0.5">
             <div className="flex items-center gap-1 min-w-0">
               <input
                 ref={fileInputRef}
@@ -147,7 +162,7 @@ export function Composer({
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isProcessingFile}
-                className="min-h-[44px] px-2.5 sm:px-3 rounded-xl text-xs font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+                className="agm-press min-h-[44px] min-w-[44px] px-2.5 sm:px-3 rounded-xl text-xs font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
                 title="Upload PDF, TXT, or HTML file"
                 aria-label="Attach document"
               >
@@ -162,7 +177,7 @@ export function Composer({
               <button
                 type="button"
                 onClick={onOpenWebsiteReader}
-                className="min-h-[44px] px-2.5 sm:px-3 rounded-xl text-xs font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="agm-press min-h-[44px] min-w-[44px] px-2.5 sm:px-3 rounded-xl text-xs font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                 title="Read public website URL in browser"
                 aria-label="Open website reader"
               >
@@ -173,12 +188,12 @@ export function Composer({
               <button
                 type="button"
                 onClick={onOpenSettings}
-                className="min-h-[44px] px-2.5 sm:px-3 rounded-xl text-xs font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap min-w-0 cursor-pointer"
-                title="Configure Local AI model & WebGPU/WASM backend"
+                className="agm-press min-h-[44px] px-2.5 sm:px-3 rounded-xl text-xs font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/[0.06] inline-flex items-center gap-1.5 whitespace-nowrap min-w-0 cursor-pointer"
+                title="Configure AI model & WebGPU/WASM backend"
                 aria-label="Open engine settings"
               >
                 <Cpu className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                <span className="truncate max-w-[115px] sm:max-w-[180px]">
+                <span className="truncate max-w-[110px] sm:max-w-[180px]">
                   {modelShortName}
                   {localState.backend ? ` · ${localState.backend.toUpperCase()}` : ''}
                 </span>
@@ -189,7 +204,7 @@ export function Composer({
               <button
                 type="button"
                 onClick={onStop}
-                className="min-h-[44px] px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs sm:text-sm font-medium inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="agm-press min-h-[44px] px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs sm:text-sm font-medium inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                 aria-label="Stop generation"
               >
                 <Square className="w-3.5 h-3.5 fill-current" />
@@ -200,7 +215,7 @@ export function Composer({
                 type="button"
                 onClick={onSend}
                 disabled={!canSend}
-                className="min-h-[44px] min-w-[44px] px-3.5 sm:px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-200 dark:disabled:bg-white/10 disabled:text-slate-400 dark:disabled:text-slate-500 text-white text-xs sm:text-sm font-medium inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer disabled:cursor-not-allowed"
+                className="agm-press min-h-[44px] min-w-[44px] px-3.5 sm:px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-200 dark:disabled:bg-white/10 disabled:text-slate-400 dark:disabled:text-slate-500 text-white text-xs sm:text-sm font-medium inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer disabled:cursor-not-allowed"
                 aria-label="Send message"
               >
                 <Send className="w-4 h-4" />

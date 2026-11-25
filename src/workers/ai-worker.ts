@@ -47,6 +47,8 @@ let generator: TextGenerationPipeline | null = null;
 let loadedModelId: string | null = null;
 let activeBackend: 'webgpu' | 'wasm' | null = null;
 let loadingPromise: Promise<void> | null = null;
+let activeGenerationPromise: Promise<void> = Promise.resolve();
+let activeRequestId: string | null = null;
 const stoppingCriteria = new InterruptableStoppingCriteria();
 
 function post(payload: Record<string, unknown>) {
@@ -116,12 +118,12 @@ function formatLoadError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
   const lower = raw.toLowerCase();
   if (lower.includes('failed to fetch') || lower.includes('networkerror') || lower.includes('offline')) {
-    return 'Unable to download model files. The first model download requires internet access to fetch weights from Hugging Face Hub; once cached, offline inference is supported.';
+    return 'Unable to download model files. The first model download requires internet access to fetch weights; once cached, offline inference is supported.';
   }
   if (lower.includes('out of memory') || lower.includes('oom') || lower.includes('memory')) {
-    return 'Browser ran out of memory while loading this model. Try switching to SmolLM2-135M-Instruct in Settings or closing other browser tabs.';
+    return 'Device ran out of memory while loading this model. Try switching to SmolLM2-135M-Instruct in Settings or closing background apps.';
   }
-  return raw || 'Failed to initialize local AI model in browser.';
+  return raw || 'Failed to initialize local AI model.';
 }
 
 async function ensureModelLoaded(
@@ -151,7 +153,7 @@ async function ensureModelLoaded(
       status: 'loading',
       modelId,
       backend: null,
-      detail: 'Checking browser WebGPU and WebAssembly support...',
+      detail: 'Checking WebGPU and WebAssembly support...',
     });
 
     const hasWebGpu = devicePreference !== 'wasm' ? await detectWebGpuSupport() : false;
@@ -225,7 +227,13 @@ async function ensureModelLoaded(
 }
 
 async function unloadModel() {
+  activeRequestId = null;
   stoppingCriteria.interrupt();
+  try {
+    await activeGenerationPromise;
+  } catch {
+    // Ignore errors from unwinding generation
+  }
   if (generator) {
     try {
       const disposable = generator as unknown as { dispose?: () => Promise<void> };
@@ -248,75 +256,97 @@ async function unloadModel() {
 }
 
 async function handleGenerate(msg: Extract<WorkerInboundMessage, { type: 'generate' }>) {
-  try {
-    await ensureModelLoaded(msg.modelId, msg.devicePreference);
-    if (!generator) {
-      throw new Error('Local AI model failed to initialize.');
+  activeRequestId = msg.requestId;
+
+  const run = async () => {
+    // If cancelled before even starting, finish cleanly without running ONNX
+    if (activeRequestId !== msg.requestId) {
+      post({ type: 'done', requestId: msg.requestId, interrupted: true });
+      return;
     }
 
-    stoppingCriteria.reset();
-    post({
-      type: 'status',
-      status: 'generating',
-      modelId: loadedModelId,
-      backend: activeBackend,
-      detail: `Generating locally (${activeBackend === 'webgpu' ? 'WebGPU' : 'WASM'})...`,
-    });
+    try {
+      await ensureModelLoaded(msg.modelId, msg.devicePreference);
+      if (!generator) {
+        throw new Error('Local AI model failed to initialize.');
+      }
+      if (activeRequestId !== msg.requestId) {
+        post({ type: 'done', requestId: msg.requestId, interrupted: true });
+        return;
+      }
 
-    const streamer = new TextStreamer(generator.tokenizer, {
-      skip_prompt: true,
-      skip_special_tokens: true,
-      callback_function: (text: string) => {
-        if (text) {
-          post({
-            type: 'chunk',
-            requestId: msg.requestId,
-            text,
-          });
-        }
-      },
-    });
+      stoppingCriteria.reset();
+      post({
+        type: 'status',
+        status: 'generating',
+        modelId: loadedModelId,
+        backend: activeBackend,
+        detail: `Generating locally (${activeBackend === 'webgpu' ? 'WebGPU' : 'WASM'})...`,
+      });
 
-    const safeTemp = Math.max(0.1, Math.min(1.2, msg.temperature || 0.6));
+      const streamer = new TextStreamer(generator.tokenizer, {
+        skip_prompt: true,
+        skip_special_tokens: true,
+        callback_function: (text: string) => {
+          if (text && activeRequestId === msg.requestId) {
+            post({
+              type: 'chunk',
+              requestId: msg.requestId,
+              text,
+            });
+          }
+        },
+      });
 
-    await generator(msg.messages, {
-      max_new_tokens: Math.max(64, Math.min(1024, msg.maxNewTokens || 512)),
-      do_sample: safeTemp > 0.15,
-      temperature: safeTemp,
-      top_p: 0.9,
-      repetition_penalty: 1.12,
-      streamer,
-      stopping_criteria: [stoppingCriteria],
-    });
+      const safeTemp = Math.max(0.1, Math.min(1.2, msg.temperature || 0.6));
 
-    post({
-      type: 'done',
-      requestId: msg.requestId,
-      interrupted: stoppingCriteria.interrupted,
-    });
+      await generator(msg.messages, {
+        max_new_tokens: Math.max(64, Math.min(1024, msg.maxNewTokens || 512)),
+        do_sample: safeTemp > 0.15,
+        temperature: safeTemp,
+        top_p: 0.9,
+        repetition_penalty: 1.12,
+        streamer,
+        stopping_criteria: [stoppingCriteria],
+      });
 
-    post({
-      type: 'status',
-      status: 'ready',
-      modelId: loadedModelId,
-      backend: activeBackend,
-      detail: `Ready (${activeBackend === 'webgpu' ? 'WebGPU' : 'WASM'})`,
-    });
-  } catch (err) {
-    const message = formatLoadError(err);
-    post({
-      type: 'error',
-      requestId: msg.requestId,
-      message,
-    });
-    post({
-      type: 'status',
-      status: generator ? 'ready' : 'error',
-      modelId: loadedModelId,
-      backend: activeBackend,
-      detail: message,
-    });
-  }
+      post({
+        type: 'done',
+        requestId: msg.requestId,
+        interrupted: stoppingCriteria.interrupted || activeRequestId !== msg.requestId,
+      });
+
+      post({
+        type: 'status',
+        status: 'ready',
+        modelId: loadedModelId,
+        backend: activeBackend,
+        detail: `Ready (${activeBackend === 'webgpu' ? 'WebGPU' : 'WASM'})`,
+      });
+    } catch (err) {
+      const message = formatLoadError(err);
+      post({
+        type: 'error',
+        requestId: msg.requestId,
+        message,
+      });
+      post({
+        type: 'status',
+        status: generator ? 'ready' : 'error',
+        modelId: loadedModelId,
+        backend: activeBackend,
+        detail: message,
+      });
+    } finally {
+      if (activeRequestId === msg.requestId) {
+        activeRequestId = null;
+      }
+    }
+  };
+
+  // Serialize ONNX sessions strictly so stop + rapid resend never collides
+  activeGenerationPromise = activeGenerationPromise.then(run, run);
+  await activeGenerationPromise;
 }
 
 self.onmessage = async (event: MessageEvent<WorkerInboundMessage>) => {
@@ -336,8 +366,10 @@ self.onmessage = async (event: MessageEvent<WorkerInboundMessage>) => {
       });
     }
   } else if (msg.type === 'generate') {
+    stoppingCriteria.interrupt();
     await handleGenerate(msg);
   } else if (msg.type === 'stop') {
+    activeRequestId = null;
     stoppingCriteria.interrupt();
   } else if (msg.type === 'unload') {
     await unloadModel();

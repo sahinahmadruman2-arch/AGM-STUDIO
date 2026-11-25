@@ -1,8 +1,9 @@
-import { useState, type ReactNode } from 'react';
+import { memo, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { Check, Copy } from 'lucide-react';
+import { copyTextToClipboard } from '../lib/clipboard';
 
 interface MarkdownRendererProps {
   content: string;
@@ -11,10 +12,11 @@ interface MarkdownRendererProps {
 function isSafeHref(href?: string): boolean {
   if (!href) return false;
   const trimmed = href.trim().toLowerCase();
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('mailto:')) {
-    return true;
-  }
-  return false;
+  return (
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('mailto:')
+  );
 }
 
 function extractTextContent(node: ReactNode): string {
@@ -40,12 +42,10 @@ function CodeBlock({
   const rawCode = extractTextContent(children).replace(/\n$/, '');
 
   const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(rawCode);
+    const ok = await copyTextToClipboard(rawCode);
+    if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
-    } catch {
-      // Clipboard fallback ignored
     }
   };
 
@@ -58,7 +58,7 @@ function CodeBlock({
         <button
           type="button"
           onClick={handleCopy}
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-emerald-300 transition-colors cursor-pointer"
+          className="agm-press min-h-[32px] px-2 rounded-lg inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-emerald-300 hover:bg-slate-200/70 dark:hover:bg-white/[0.06] cursor-pointer"
           aria-label="Copy code snippet"
         >
           {copied ? (
@@ -81,12 +81,15 @@ function CodeBlock({
   );
 }
 
-export function MarkdownRenderer({ content }: MarkdownRendererProps) {
+const REMARK_PLUGINS = [remarkGfm];
+const REHYPE_PLUGINS = [rehypeHighlight];
+
+export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: MarkdownRendererProps) {
   return (
     <div className="prose-agm text-[15px] leading-relaxed text-slate-800 dark:text-slate-100 break-words">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight]}
+        remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={REHYPE_PLUGINS}
         components={{
           h1: ({ children }) => (
             <h1 className="text-xl font-semibold mt-5 mb-2.5 text-slate-900 dark:text-white tracking-tight">
@@ -146,7 +149,9 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
           ),
           pre: ({ children }) => <>{children}</>,
           code: ({ className, children, ...props }) => {
-            const isBlock = Boolean(className && (className.includes('language-') || className.includes('hljs')));
+            const isBlock = Boolean(
+              className && (className.includes('language-') || className.includes('hljs'))
+            );
             const textStr = extractTextContent(children);
             const hasNewline = textStr.includes('\n');
             if (isBlock || hasNewline) {
@@ -167,4 +172,4 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
       </ReactMarkdown>
     </div>
   );
-}
+});

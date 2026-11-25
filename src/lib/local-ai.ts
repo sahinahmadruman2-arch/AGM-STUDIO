@@ -5,6 +5,7 @@ import type {
   LocalModelId,
 } from '../types';
 import { formatBytes } from './database';
+import { createId } from './id';
 
 export const DEFAULT_LOCAL_MODEL_ID: LocalModelId = 'HuggingFaceTB/SmolLM2-360M-Instruct';
 
@@ -113,8 +114,15 @@ class LocalAiManager {
       this.worker.onmessage = (event: MessageEvent) => this.handleWorkerMessage(event.data);
       this.worker.onerror = (err) => {
         const message = err.message || 'Local AI Web Worker encountered an error.';
+        try {
+          this.worker?.terminate();
+        } catch {
+          // Ignore terminate error
+        }
+        this.worker = null;
         this.updateState({
           status: 'error',
+          backend: null,
           error: message,
           progressDetail: message,
         });
@@ -147,7 +155,10 @@ class LocalAiManager {
       });
     } else if (data.type === 'status') {
       const status = data.status as LocalEngineState['status'];
-      const backend = (data.backend as LocalEngineState['backend']) ?? this.state.backend;
+      const backend =
+        'backend' in data
+          ? ((data.backend as LocalEngineState['backend']) ?? null)
+          : this.state.backend;
       const modelId =
         typeof data.modelId === 'string'
           ? (data.modelId as LocalModelId)
@@ -242,7 +253,7 @@ class LocalAiManager {
       return;
     }
 
-    const requestId = crypto.randomUUID();
+    const requestId = createId();
     this.activeRequest = {
       requestId,
       onChunk: params.onChunk,
@@ -264,6 +275,11 @@ class LocalAiManager {
   stop() {
     if (this.worker) {
       this.worker.postMessage({ type: 'stop' });
+    }
+    if (this.activeRequest) {
+      const req = this.activeRequest;
+      this.activeRequest = null;
+      req.onDone(true);
     }
   }
 

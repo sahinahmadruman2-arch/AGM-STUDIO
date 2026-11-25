@@ -17,6 +17,8 @@
 
   body {
     overscroll-behavior: none;
+    transition: background-color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+      color 200ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   h1, h2, h3, h4, .font-display {
@@ -52,18 +54,103 @@
   background-color: rgba(16, 185, 129, 0.45);
 }
 
-/* Subtle cosmic canvas backdrop for dark mode */
+/* Deep space black & dark navy backdrop */
 .dark .agm-space-canvas {
   background-color: #060911;
   background-image:
-    radial-gradient(ellipse 75% 50% at 50% -10%, rgba(16, 185, 129, 0.08), transparent 65%),
-    radial-gradient(ellipse 50% 40% at 85% 100%, rgba(15, 23, 42, 0.7), transparent 65%);
+    radial-gradient(ellipse 80% 45% at 50% -10%, rgba(16, 185, 129, 0.09), transparent 68%),
+    radial-gradient(ellipse 55% 45% at 90% 100%, rgba(15, 23, 42, 0.72), transparent 65%);
 }
 
 .agm-space-canvas {
   background-color: #f8fafc;
   background-image:
-    radial-gradient(ellipse 75% 50% at 50% -10%, rgba(16, 185, 129, 0.05), transparent 65%);
+    radial-gradient(ellipse 80% 45% at 50% -10%, rgba(16, 185, 129, 0.06), transparent 68%);
+}
+
+/* Lightweight GPU-composited animations (transform & opacity only) */
+@keyframes agmFadeUp {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes agmSheetUp {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 20px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes agmDrawerIn {
+  from {
+    opacity: 0;
+    transform: translate3d(-18px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes agmBackdropIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes agmOrbitSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.agm-fade-up {
+  animation: agmFadeUp 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.agm-sheet-up {
+  animation: agmSheetUp 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.agm-drawer-in {
+  animation: agmDrawerIn 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.agm-backdrop-in {
+  animation: agmBackdropIn 180ms ease-out both;
+}
+
+.agm-orbit-spin {
+  animation: agmOrbitSpin 18s linear infinite;
+  transform-origin: center;
+}
+
+.agm-press {
+  transition: transform 140ms cubic-bezier(0.16, 1, 0.3, 1),
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    opacity 160ms ease;
+}
+
+.agm-press:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 /* Highlight.js token styling tuned for both Dark & Light modes */

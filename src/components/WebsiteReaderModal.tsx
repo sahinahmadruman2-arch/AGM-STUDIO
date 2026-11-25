@@ -87,7 +87,7 @@ export function WebsiteReaderModal({
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
       <div
-        className="fixed inset-0 bg-black/65 backdrop-blur-sm"
+        className="fixed inset-0 bg-black/65 backdrop-blur-sm agm-backdrop-in"
         onClick={onClose}
         aria-hidden="true"
       />
@@ -95,8 +95,9 @@ export function WebsiteReaderModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="website-reader-title"
-        className="relative z-10 w-full sm:max-w-2xl max-h-[90vh] flex flex-col rounded-t-3xl sm:rounded-2xl border border-slate-200 dark:border-white/15 bg-white dark:bg-[#0B1120] shadow-2xl overflow-hidden"
+        className="agm-sheet-up relative z-10 w-full sm:max-w-2xl max-h-[90dvh] flex flex-col rounded-t-3xl sm:rounded-2xl border border-slate-200 dark:border-white/15 bg-white dark:bg-[#0B1120] shadow-2xl overflow-hidden pb-[env(safe-area-inset-bottom)]"
       >
+        <div className="sm:hidden w-10 h-1 rounded-full bg-slate-300 dark:bg-white/20 mx-auto mt-2.5 shrink-0" />
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-white/10">
           <div className="flex items-center gap-2.5">

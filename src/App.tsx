@@ -8,6 +8,7 @@ import {
   X,
   ArrowDown,
   WifiOff,
+  RotateCcw,
 } from 'lucide-react';
 import type {
   AppSettings,
@@ -35,6 +36,7 @@ import {
   registerAndroidBackHandler,
   syncNativeSystemBars,
 } from './lib/capacitor-bridge';
+import { createId } from './lib/id';
 import { detectBrowserCapabilities, localAiManager } from './lib/local-ai';
 import { deriveConversationTitle, generateAssistantReply } from './lib/chat-engine';
 import { processUploadedDocument } from './lib/document-reader';
@@ -44,7 +46,7 @@ import { MessageBubble } from './components/MessageBubble';
 import { Composer } from './components/Composer';
 import { WebsiteReaderModal } from './components/WebsiteReaderModal';
 import { DocumentPreviewModal } from './components/DocumentPreviewModal';
-import { SettingsModal } from './components/SettingsModal';
+import { SettingsModal, type SettingsTab } from './components/SettingsModal';
 
 export default function App() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
@@ -69,11 +71,16 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isWebsiteReaderOpen, setIsWebsiteReaderOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('engine');
   const [previewAttachment, setPreviewAttachment] = useState<AttachmentItem | null>(null);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
 
   const stopRef = useRef<(() => void) | null>(null);
+  const activeGenTokenRef = useRef(0);
+  const isSubmittingRef = useRef(false);
+  const rafUpdateRef = useRef<number | null>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const shouldAutoScrollRef = useRef(true);
   const streamingContentRef = useRef('');
 
@@ -130,6 +137,9 @@ export default function App() {
       unsubscribe();
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      if (rafUpdateRef.current !== null) {
+        cancelAnimationFrame(rafUpdateRef.current);
+      }
     };
   }, []);
 
@@ -191,6 +201,11 @@ export default function App() {
     ? activeConversation.attachments
     : draftAttachments;
 
+  const openSettings = useCallback((tab: SettingsTab = 'engine') => {
+    setSettingsTab(tab);
+    setIsSettingsOpen(true);
+  }, []);
+
   const updateSettings = useCallback((patch: Partial<AppSettings>) => {
     setSettings((prev) => {
       const next = { ...prev, ...patch };
@@ -208,14 +223,14 @@ export default function App() {
     el.scrollTo({ top: el.scrollHeight, behavior });
   }, []);
 
-  const handleMessagesScroll = () => {
+  const handleMessagesScroll = useCallback(() => {
     const el = messagesContainerRef.current;
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const isNearBottom = distanceFromBottom < 80;
+    const isNearBottom = distanceFromBottom < 84;
     shouldAutoScrollRef.current = isNearBottom;
     setShowScrollBottom(!isNearBottom && el.scrollHeight > el.clientHeight + 100);
-  };
+  }, []);
 
   useEffect(() => {
     if (shouldAutoScrollRef.current) {
@@ -234,25 +249,42 @@ export default function App() {
     void saveConversation(conv);
   }, []);
 
+  const abortActiveGeneration = useCallback(() => {
+    activeGenTokenRef.current += 1;
+    if (rafUpdateRef.current !== null) {
+      cancelAnimationFrame(rafUpdateRef.current);
+      rafUpdateRef.current = null;
+    }
+    if (stopRef.current) {
+      const stopFn = stopRef.current;
+      stopRef.current = null;
+      stopFn();
+    }
+    setIsGenerating(false);
+    setStreamingMessageId(null);
+    isSubmittingRef.current = false;
+  }, []);
+
   const handleNewChat = useCallback(() => {
     if (isGenerating) {
-      stopRef.current?.();
+      abortActiveGeneration();
     }
     setActiveConversationId(null);
     setDraftAttachments([]);
     setBannerError(null);
-  }, [isGenerating]);
+  }, [isGenerating, abortActiveGeneration]);
 
   const handleSelectConversation = useCallback(
     (id: string) => {
+      if (id === activeConversationId) return;
       if (isGenerating) {
-        stopRef.current?.();
+        abortActiveGeneration();
       }
       setActiveConversationId(id);
       setBannerError(null);
       shouldAutoScrollRef.current = true;
     },
-    [isGenerating]
+    [activeConversationId, isGenerating, abortActiveGeneration]
   );
 
   const handleRenameConversation = useCallback(
@@ -272,7 +304,7 @@ export default function App() {
   const handleDeleteConversation = useCallback(
     (id: string) => {
       if (id === activeConversationId && isGenerating) {
-        stopRef.current?.();
+        abortActiveGeneration();
       }
       setConversations((prev) => {
         const remaining = prev.filter((c) => c.id !== id);
@@ -283,7 +315,7 @@ export default function App() {
       });
       void deleteConversation(id);
     },
-    [activeConversationId, isGenerating]
+    [activeConversationId, isGenerating, abortActiveGeneration]
   );
 
   const handleClearCurrentChat = useCallback(() => {
@@ -350,6 +382,7 @@ export default function App() {
 
   const runAssistantGeneration = useCallback(
     (convSnapshot: Conversation, assistantMessageId: string) => {
+      const genToken = ++activeGenTokenRef.current;
       setIsGenerating(true);
       setStreamingMessageId(assistantMessageId);
       setBannerError(null);
@@ -380,30 +413,47 @@ export default function App() {
         }
       };
 
+      const flushStreamingContent = () => {
+        rafUpdateRef.current = null;
+        if (activeGenTokenRef.current !== genToken) return;
+        patchAssistantMessage(
+          {
+            content: streamingContentRef.current,
+            backend: localAiManager.getState().backend,
+          },
+          false
+        );
+        if (shouldAutoScrollRef.current) {
+          scrollToBottom('auto');
+        }
+      };
+
       const stop = generateAssistantReply({
         messages: historyForModel,
         attachments: convSnapshot.attachments,
         settings,
-        onChunk: (delta) => {
-          streamingContentRef.current += delta;
-          patchAssistantMessage(
-            {
-              content: streamingContentRef.current,
-              backend: localAiManager.getState().backend,
-            },
-            false
-          );
-          if (shouldAutoScrollRef.current) {
-            scrollToBottom('auto');
+        onContent: (fullText) => {
+          if (activeGenTokenRef.current !== genToken) return;
+          streamingContentRef.current = fullText;
+          if (rafUpdateRef.current === null) {
+            rafUpdateRef.current = requestAnimationFrame(flushStreamingContent);
           }
         },
-        onDone: (interrupted) => {
-          setIsGenerating(false);
-          setStreamingMessageId(null);
-          stopRef.current = null;
+        onDone: (interrupted, finalText) => {
+          if (rafUpdateRef.current !== null) {
+            cancelAnimationFrame(rafUpdateRef.current);
+            rafUpdateRef.current = null;
+          }
+          const finalContent = finalText || streamingContentRef.current;
+          if (activeGenTokenRef.current === genToken) {
+            setIsGenerating(false);
+            setStreamingMessageId(null);
+            stopRef.current = null;
+            isSubmittingRef.current = false;
+          }
           patchAssistantMessage(
             {
-              content: streamingContentRef.current,
+              content: finalContent,
               backend: localAiManager.getState().backend,
               isStopped: interrupted,
             },
@@ -411,9 +461,16 @@ export default function App() {
           );
         },
         onError: (errMsg) => {
-          setIsGenerating(false);
-          setStreamingMessageId(null);
-          stopRef.current = null;
+          if (rafUpdateRef.current !== null) {
+            cancelAnimationFrame(rafUpdateRef.current);
+            rafUpdateRef.current = null;
+          }
+          if (activeGenTokenRef.current === genToken) {
+            setIsGenerating(false);
+            setStreamingMessageId(null);
+            stopRef.current = null;
+            isSubmittingRef.current = false;
+          }
           patchAssistantMessage(
             {
               content: streamingContentRef.current,
@@ -432,70 +489,76 @@ export default function App() {
   const sendPrompt = useCallback(
     (promptText: string, extraAttachment?: AttachmentItem) => {
       const trimmed = promptText.trim();
-      if (!trimmed || isGenerating) return;
+      if (!trimmed || isGenerating || isSubmittingRef.current) return;
+      isSubmittingRef.current = true;
 
-      const now = Date.now();
-      const baseAttachments = activeConversation
-        ? [...activeConversation.attachments]
-        : [...draftAttachments];
-      if (extraAttachment) {
-        baseAttachments.push(extraAttachment);
-      }
+      try {
+        const now = Date.now();
+        const baseAttachments = activeConversation
+          ? [...activeConversation.attachments]
+          : [...draftAttachments];
+        if (extraAttachment) {
+          baseAttachments.push(extraAttachment);
+        }
 
-      const userMessage: ChatMessage = {
-        id: crypto.randomUUID(),
-        role: 'user',
-        content: trimmed,
-        createdAt: now,
-        attachments: baseAttachments.map((a) => ({
-          id: a.id,
-          kind: a.kind,
-          name: a.name,
-          wordCount: a.wordCount,
-          pageCount: a.pageCount,
-          url: a.url,
-        })),
-      };
-
-      const assistantId = crypto.randomUUID();
-      const localModelShort = settings.localModelId.split('/').pop() || 'SmolLM2-360M-Instruct';
-      const assistantMessage: ChatMessage = {
-        id: assistantId,
-        role: 'assistant',
-        content: '',
-        createdAt: now + 1,
-        model: localModelShort,
-        backend: localState.backend,
-      };
-
-      let targetConv: Conversation;
-      if (activeConversation) {
-        targetConv = {
-          ...activeConversation,
-          title:
-            activeConversation.messages.length === 0
-              ? deriveConversationTitle(trimmed)
-              : activeConversation.title,
-          attachments: baseAttachments,
-          messages: [...activeConversation.messages, userMessage, assistantMessage],
-          updatedAt: now,
-        };
-      } else {
-        targetConv = {
-          id: crypto.randomUUID(),
-          title: deriveConversationTitle(trimmed),
+        const userMessage: ChatMessage = {
+          id: createId(),
+          role: 'user',
+          content: trimmed,
           createdAt: now,
-          updatedAt: now,
-          attachments: baseAttachments,
-          messages: [userMessage, assistantMessage],
+          attachments: baseAttachments.map((a) => ({
+            id: a.id,
+            kind: a.kind,
+            name: a.name,
+            wordCount: a.wordCount,
+            pageCount: a.pageCount,
+            url: a.url,
+          })),
         };
-        setDraftAttachments([]);
-        setActiveConversationId(targetConv.id);
-      }
 
-      setInput('');
-      persistConversationUpdate(targetConv);
-      runAssistantGeneration(targetConv, assistantId);
+        const assistantId = createId();
+        const localModelShort = settings.localModelId.split('/').pop() || 'SmolLM2-360M-Instruct';
+        const assistantMessage: ChatMessage = {
+          id: assistantId,
+          role: 'assistant',
+          content: '',
+          createdAt: now + 1,
+          model: localModelShort,
+          backend: localState.backend,
+        };
+
+        let targetConv: Conversation;
+        if (activeConversation) {
+          targetConv = {
+            ...activeConversation,
+            title:
+              activeConversation.messages.length === 0
+                ? deriveConversationTitle(trimmed)
+                : activeConversation.title,
+            attachments: baseAttachments,
+            messages: [...activeConversation.messages, userMessage, assistantMessage],
+            updatedAt: now,
+          };
+        } else {
+          targetConv = {
+            id: createId(),
+            title: deriveConversationTitle(trimmed),
+            createdAt: now,
+            updatedAt: now,
+            attachments: baseAttachments,
+            messages: [userMessage, assistantMessage],
+          };
+          setDraftAttachments([]);
+          setActiveConversationId(targetConv.id);
+        }
+
+        setInput('');
+        persistConversationUpdate(targetConv);
+        runAssistantGeneration(targetConv, assistantId);
+      } catch (err) {
+        isSubmittingRef.current = false;
+        setBannerError(err instanceof Error ? err.message : 'Unable to send message.');
+      }
     },
     [
       isGenerating,
@@ -509,7 +572,12 @@ export default function App() {
   );
 
   const handleRegenerate = useCallback(() => {
-    if (!activeConversation || isGenerating || activeConversation.messages.length === 0) {
+    if (
+      !activeConversation ||
+      isGenerating ||
+      isSubmittingRef.current ||
+      activeConversation.messages.length === 0
+    ) {
       return;
     }
 
@@ -519,7 +587,7 @@ export default function App() {
       messages.pop();
     }
 
-    const assistantId = crypto.randomUUID();
+    const assistantId = createId();
     const localModelShort = settings.localModelId.split('/').pop() || 'SmolLM2-360M-Instruct';
     const newAssistantMsg: ChatMessage = {
       id: assistantId,
@@ -548,8 +616,8 @@ export default function App() {
   ]);
 
   const handleStop = useCallback(() => {
-    stopRef.current?.();
-  }, []);
+    abortActiveGeneration();
+  }, [abortActiveGeneration]);
 
   const handleAttachWebsite = useCallback(
     (attachment: AttachmentItem, suggestedQuestion?: string) => {
@@ -563,22 +631,22 @@ export default function App() {
   );
 
   const handleClearAllConversations = useCallback(async () => {
-    if (isGenerating) stopRef.current?.();
+    if (isGenerating) abortActiveGeneration();
     await clearAllConversations();
     setConversations([]);
     setActiveConversationId(null);
     setDraftAttachments([]);
-  }, [isGenerating]);
+  }, [isGenerating, abortActiveGeneration]);
 
   const handleResetAllLocalData = useCallback(async () => {
-    if (isGenerating) stopRef.current?.();
+    if (isGenerating) abortActiveGeneration();
     localAiManager.unload();
     await clearAllLocalData();
     setConversations([]);
     setActiveConversationId(null);
     setDraftAttachments([]);
     setSettings({ ...DEFAULT_SETTINGS });
-  }, [isGenerating]);
+  }, [isGenerating, abortActiveGeneration]);
 
   const modelShortName = settings.localModelId.split('/').pop() || 'SmolLM2-360M-Instruct';
   const messages = activeConversation?.messages ?? [];
@@ -609,18 +677,18 @@ export default function App() {
         onToggleTheme={() =>
           updateSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' })
         }
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={openSettings}
       />
 
       {/* Main Content Area */}
-      <div className="flex-1 min-w-0 flex flex-col h-full relative">
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col h-full relative">
         {/* Top Bar */}
-        <header className="min-h-14 pt-[env(safe-area-inset-top)] px-3 sm:px-6 border-b border-slate-200 dark:border-white/10 bg-white/75 dark:bg-[#080D1A]/75 backdrop-blur-xl flex items-center justify-between gap-3 shrink-0 z-20">
-          <div className="flex items-center gap-2.5 min-w-0">
+        <header className="min-h-14 pt-[env(safe-area-inset-top)] px-3 sm:px-6 border-b border-slate-200 dark:border-white/10 bg-white/80 dark:bg-[#080D1A]/85 backdrop-blur-xl flex items-center justify-between gap-3 shrink-0 z-20">
+          <div className="flex items-center gap-2 min-w-0">
             <button
               type="button"
               onClick={() => setIsSidebarOpen(true)}
-              className="lg:hidden min-h-[44px] min-w-[44px] -ml-1.5 flex items-center justify-center rounded-xl text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer shrink-0"
+              className="agm-press lg:hidden min-h-[44px] min-w-[44px] -ml-1.5 flex items-center justify-center rounded-xl text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10 cursor-pointer shrink-0"
               aria-label="Open navigation sidebar"
             >
               <Menu className="w-5 h-5" />
@@ -628,7 +696,7 @@ export default function App() {
 
             <div className="min-w-0 flex items-center gap-2">
               <h2 className="font-display text-sm sm:text-[15px] font-semibold text-slate-900 dark:text-white truncate max-w-[180px] sm:max-w-[340px]">
-                {activeConversation ? activeConversation.title : 'New Conversation'}
+                {activeConversation ? activeConversation.title : 'AGM Studio'}
               </h2>
               <span className="hidden md:inline text-xs text-slate-400" aria-hidden="true">
                 ·
@@ -651,7 +719,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setIsWebsiteReaderOpen(true)}
-              className="min-h-[40px] px-3 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 hover:border-emerald-500/40 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/[0.06] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer"
+              className="agm-press min-h-[42px] min-w-[42px] px-2.5 sm:px-3 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 hover:border-emerald-500/40 text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/[0.06] inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
               aria-label="Open Website Reader"
             >
               <Globe className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
@@ -663,7 +731,7 @@ export default function App() {
                 type="button"
                 onClick={handleClearCurrentChat}
                 disabled={isGenerating}
-                className="min-h-[40px] min-w-[40px] sm:px-3 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 text-xs font-medium text-slate-600 hover:text-rose-600 dark:text-slate-300 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-white/[0.06] inline-flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer disabled:opacity-40"
+                className="agm-press min-h-[42px] min-w-[42px] sm:px-3 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 text-xs font-medium text-slate-600 hover:text-rose-600 dark:text-slate-300 dark:hover:text-rose-400 hover:bg-slate-100 dark:hover:bg-white/[0.06] inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer disabled:opacity-40"
                 title="Clear messages in this conversation"
                 aria-label="Clear conversation"
               >
@@ -674,8 +742,8 @@ export default function App() {
 
             <button
               type="button"
-              onClick={() => setIsSettingsOpen(true)}
-              className="lg:hidden min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl border border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06] cursor-pointer"
+              onClick={() => openSettings('engine')}
+              className="agm-press lg:hidden min-h-[42px] min-w-[42px] flex items-center justify-center rounded-xl border border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/[0.06] cursor-pointer"
               aria-label="Open settings"
             >
               <SettingsIcon className="w-4 h-4" />
@@ -700,7 +768,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setStorageWarning(null)}
-              className="min-h-[28px] min-w-[28px] flex items-center justify-center rounded-lg hover:bg-amber-500/15 cursor-pointer shrink-0"
+              className="min-h-[32px] min-w-[32px] flex items-center justify-center rounded-lg hover:bg-amber-500/15 cursor-pointer shrink-0"
               aria-label="Dismiss storage notice"
             >
               <X className="w-3.5 h-3.5" />
@@ -715,30 +783,42 @@ export default function App() {
               <AlertCircle className="w-4 h-4 shrink-0" />
               <span className="truncate">{bannerError}</span>
             </div>
-            <button
-              type="button"
-              onClick={() => setBannerError(null)}
-              className="min-h-[32px] min-w-[32px] flex items-center justify-center rounded-lg hover:bg-rose-500/15 cursor-pointer shrink-0"
-              aria-label="Dismiss error"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {localState.status === 'error' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBannerError(null);
+                    localAiManager.loadModel(settings.localDevicePreference, settings.localModelId);
+                  }}
+                  className="min-h-[32px] px-2.5 rounded-lg bg-rose-600 text-white text-xs font-medium inline-flex items-center gap-1 cursor-pointer"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Retry</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setBannerError(null)}
+                className="min-h-[32px] min-w-[32px] flex items-center justify-center rounded-lg hover:bg-rose-500/15 cursor-pointer"
+                aria-label="Dismiss error"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         )}
 
         {/* Messages Feed or Welcome Screen */}
         {!isHydrated ? (
           <div className="flex-1 flex items-center justify-center text-sm text-slate-500 dark:text-slate-400">
-            Loading browser workspace...
+            Loading AGM Studio...
           </div>
         ) : messages.length === 0 ? (
           <WelcomeScreen
             localState={localState}
             onSelectPrompt={(prompt) => sendPrompt(prompt)}
-            onOpenDocumentUpload={() => {
-              const inputEl = document.querySelector('input[type="file"]') as HTMLInputElement | null;
-              inputEl?.click();
-            }}
+            onOpenDocumentUpload={() => fileInputRef.current?.click()}
             onOpenWebsiteReader={() => setIsWebsiteReaderOpen(true)}
             onInitializeModel={() =>
               localAiManager.loadModel(settings.localDevicePreference, settings.localModelId)
@@ -748,7 +828,7 @@ export default function App() {
           <div
             ref={messagesContainerRef}
             onScroll={handleMessagesScroll}
-            className="flex-1 overflow-y-auto px-3 sm:px-6 py-5 sm:py-7 relative"
+            className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-5 sm:py-7 relative"
           >
             <div className="max-w-3xl mx-auto space-y-6 pb-4">
               {messages.map((msg) => (
@@ -769,7 +849,7 @@ export default function App() {
                   shouldAutoScrollRef.current = true;
                   scrollToBottom('smooth');
                 }}
-                className="fixed bottom-28 right-5 sm:right-8 z-30 min-h-[42px] min-w-[42px] rounded-full border border-slate-200 dark:border-white/15 bg-white/95 dark:bg-[#111827]/95 shadow-lg flex items-center justify-center text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer"
+                className="agm-press fixed bottom-28 right-5 sm:right-8 z-30 min-h-[44px] min-w-[44px] rounded-full border border-slate-200 dark:border-white/15 bg-white/95 dark:bg-[#111827]/95 shadow-lg flex items-center justify-center text-slate-700 dark:text-slate-200 hover:text-emerald-600 dark:hover:text-emerald-400 cursor-pointer"
                 aria-label="Scroll to latest messages"
               >
                 <ArrowDown className="w-4 h-4" />
@@ -792,7 +872,8 @@ export default function App() {
           onPreviewAttachment={setPreviewAttachment}
           onOpenWebsiteReader={() => setIsWebsiteReaderOpen(true)}
           localState={localState}
-          onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenSettings={() => openSettings('engine')}
+          fileInputRef={fileInputRef}
         />
       </div>
 
@@ -811,6 +892,7 @@ export default function App() {
 
       <SettingsModal
         isOpen={isSettingsOpen}
+        initialTab={settingsTab}
         onClose={() => setIsSettingsOpen(false)}
         settings={settings}
         onUpdateSettings={updateSettings}

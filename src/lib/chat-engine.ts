@@ -5,10 +5,10 @@ export function buildContextSystemPrompt(
   baseSystemPrompt: string,
   attachments: AttachmentItem[]
 ): string {
-  const parts: string[] = [];
-  if (baseSystemPrompt.trim()) {
-    parts.push(baseSystemPrompt.trim());
-  }
+  const parts: string[] = [
+    baseSystemPrompt.trim() ||
+      'You are AGM Studio, a helpful AI assistant running locally in the user browser. Keep answers clear, concise, and grounded in any attached context.',
+  ];
 
   if (attachments.length > 0) {
     // Budget context cleanly for compact local model memory & latency
@@ -41,17 +41,17 @@ export interface GenerateReplyParams {
   messages: ChatMessage[];
   attachments: AttachmentItem[];
   settings: AppSettings;
-  onChunk: (delta: string) => void;
-  onDone: (interrupted: boolean) => void;
+  onContent: (fullText: string) => void;
+  onDone: (interrupted: boolean, finalText: string) => void;
   onError: (message: string) => void;
 }
 
 export function generateAssistantReply(params: GenerateReplyParams): () => void {
-  const { messages, attachments, settings, onChunk, onDone, onError } = params;
+  const { messages, attachments, settings, onContent, onDone, onError } = params;
 
   const systemInstruction = buildContextSystemPrompt(settings.systemPrompt, attachments);
 
-  // Keep recent turns compact so SmolLM2-360M-Instruct remains fast & coherent
+  // Keep recent turns compact so local models remain fast & coherent
   const compactHistory = messages
     .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content.trim().length > 0)
     .slice(-8)
@@ -65,14 +65,21 @@ export function generateAssistantReply(params: GenerateReplyParams): () => void 
     ...compactHistory,
   ];
 
+  let accumulated = '';
+
   localAiManager.generate({
     modelId: settings.localModelId,
     messages: localMessages,
     maxNewTokens: settings.localMaxTokens,
     temperature: settings.temperature,
     devicePreference: settings.localDevicePreference,
-    onChunk,
-    onDone,
+    onChunk: (delta) => {
+      accumulated += delta;
+      onContent(accumulated);
+    },
+    onDone: (interrupted) => {
+      onDone(interrupted, accumulated);
+    },
     onError,
   });
 
